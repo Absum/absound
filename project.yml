@@ -1,0 +1,76 @@
+name: Absound
+options:
+  bundleIdPrefix: fi.absum.absound
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  xcodeVersion: "26.0"
+settings:
+  base:
+    # Absum Corporation Oy
+    ORGANIZATIONNAME: Absum Corporation Oy
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1" # 1 = iPhone (portrait-first; iPad layout is M7)
+    CLANG_CXX_LANGUAGE_STANDARD: "c++17"
+    CLANG_CXX_LIBRARY: "libc++"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+targets:
+  Absound:
+    type: application
+    platform: iOS
+    sources:
+      - path: Absound
+      - path: DSP
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: fi.absum.absound
+        PRODUCT_NAME: Absound
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_OBJC_BRIDGING_HEADER: Absound/Absound-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/DSP/include
+        SUPPORTS_MACCATALYST: NO
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    info:
+      path: Absound/Info.plist
+      properties:
+        CFBundleDisplayName: Absound
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        # Portrait-only — the studio UI is designed for portrait.
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIAppFonts:
+          - Rajdhani-Light.ttf
+          - Rajdhani-Regular.ttf
+          - Rajdhani-Medium.ttf
+          - Rajdhani-SemiBold.ttf
+          - Rajdhani-Bold.ttf
+  AbsoundTests:
+    type: bundle.unit-test
+    platform: iOS
+    # Logic tests (no TEST_HOST): compile the portable C++ core directly so we can
+    # exercise the synth/theory core in isolation.
+    sources:
+      - path: Tests
+      - path: DSP
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_OBJC_BRIDGING_HEADER: Tests/AbsoundTests-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/DSP/include
+schemes:
+  Absound:
+    build:
+      targets:
+        Absound: all
+    test:
+      targets:
+        - AbsoundTests
+      gatherCoverageData: false

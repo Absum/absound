@@ -1,0 +1,19 @@
+# Xcode / build
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+
+# XcodeGen generates the project from project.yml — keep it out of git.
+Absound.xcodeproj/
+
+# MCP server config — contains live agent bearer tokens, never commit.
+.mcp.json
+
+# macOS
+.DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
