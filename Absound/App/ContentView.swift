@@ -11,7 +11,7 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            StudioPlaceholder()
+            PatternStudioView()
                 .tag(0)
                 .tabItem { Label("Studio", systemImage: "square.grid.3x3.fill") }
             ComingSoon(title: "Song")
@@ -23,35 +23,6 @@ struct ContentView: View {
         }
         .tint(Theme.teal)
         .preferredColorScheme(.dark)
-    }
-}
-
-/// Landing surface for the Pattern Studio (the app's spine). M0 placeholder.
-private struct StudioPlaceholder: View {
-    var body: some View {
-        ZStack {
-            ArcticBackground()
-            VStack(spacing: 12) {
-                Text("ABSOUND")
-                    .font(Theme.display(48))
-                    .foregroundStyle(Theme.frost)
-                    .tracking(6)
-                Text("compose · learn · export")
-                    .font(Theme.title(18))
-                    .foregroundStyle(Theme.teal)
-                    .tracking(2)
-                Text(synthVersion)
-                    .font(Theme.light(13))
-                    .foregroundStyle(Theme.frost.opacity(0.4))
-                    .padding(.top, 24)
-            }
-        }
-    }
-
-    /// Calls into the C++ DSP core — proves the Swift<->C++ bridge links at runtime.
-    private var synthVersion: String {
-        guard let cString = ab_synth_version() else { return "" }
-        return String(cString: cString)
     }
 }
 
