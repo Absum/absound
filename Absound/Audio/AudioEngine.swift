@@ -69,14 +69,22 @@ final class AudioEngine {
 
     func setTempo(_ bpm: Double) { ab_core_set_tempo(core, bpm) }
     func setPlaying(_ playing: Bool) { ab_core_set_playing(core, playing ? 1 : 0) }
-    func setSynthPreset(_ preset: Int) { ab_core_set_synth_preset(core, Int32(preset)) }
     var currentStep: Int { Int(ab_core_current_step(core)) }
+    var playPosition: Double { ab_core_play_position(core) }
 
-    func setStep(track: Int32, step: Int, note: Int, velocity: Int) {
-        ab_core_set_step(core, track, Int32(step), Int32(note), Int32(velocity))
+    // Track pool.
+    @discardableResult
+    func addTrack(kind: Int, sound: Int) -> Int { Int(ab_core_add_track(core, Int32(kind), Int32(sound))) }
+    func removeTrack(_ engineId: Int) { ab_core_remove_track(core, Int32(engineId)) }
+    func setTrackSound(_ engineId: Int, sound: Int) { ab_core_set_track_sound(core, Int32(engineId), Int32(sound)) }
+    func setTrackMute(_ engineId: Int, muted: Bool) { ab_core_set_track_mute(core, Int32(engineId), muted ? 1 : 0) }
+    func clearTrack(_ engineId: Int) { ab_core_clear_track(core, Int32(engineId)) }
+    func clearAll() { ab_core_clear_all(core) }
+
+    func setStep(track: Int, step: Int, note: Int, velocity: Int) {
+        ab_core_set_step(core, Int32(track), Int32(step), Int32(note), Int32(velocity))
     }
-    func clear() { ab_core_clear(core) }
-    func noteOn(track: Int32, note: Int, velocity: Float) {
-        ab_core_note_on(core, track, Int32(note), velocity)
+    func noteOn(track: Int, note: Int, velocity: Float) {
+        ab_core_note_on(core, Int32(track), Int32(note), velocity)
     }
 }
