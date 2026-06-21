@@ -187,13 +187,41 @@ struct SynthVoice {
     bool busy = false;
     int gateCountdown = -1;   // samples until auto note-off (-1 = hold until noteOff)
 
+    // Preset-driven timbre params.
+    float subLevel = 0.5f;
+    float baseCut = 380.0f;     // filter cutoff floor (Hz)
+    float cutEnvAmt = 5200.0f;  // env -> cutoff depth (Hz)
+
     void init(float sampleRate) {
         sr = sampleRate;
-        osc.wave = Wave::Saw;
-        sub.wave = Wave::Square;
         filter.setSampleRate(sampleRate);
-        amp.configure(sampleRate, 0.004f, 0.12f, 0.75f, 0.18f);
-        fenv.configure(sampleRate, 0.004f, 0.18f, 0.35f, 0.20f);
+        setPreset(0);
+    }
+
+    // 0=Pluck, 1=Bass, 2=Lead, 3=Keys.
+    void setPreset(int p) {
+        switch (p) {
+            case 1: // Bass
+                osc.wave = Wave::Saw; sub.wave = Wave::Square; subLevel = 0.7f;
+                amp.configure(sr, 0.004f, 0.12f, 0.65f, 0.10f);
+                fenv.configure(sr, 0.004f, 0.12f, 0.30f, 0.10f);
+                baseCut = 230.0f; cutEnvAmt = 2600.0f; break;
+            case 2: // Lead
+                osc.wave = Wave::Saw; sub.wave = Wave::Saw; subLevel = 0.4f;
+                amp.configure(sr, 0.005f, 0.16f, 0.80f, 0.18f);
+                fenv.configure(sr, 0.006f, 0.22f, 0.40f, 0.20f);
+                baseCut = 720.0f; cutEnvAmt = 6200.0f; break;
+            case 3: // Keys
+                osc.wave = Wave::Triangle; sub.wave = Wave::Sine; subLevel = 0.35f;
+                amp.configure(sr, 0.003f, 0.20f, 0.55f, 0.22f);
+                fenv.configure(sr, 0.004f, 0.16f, 0.35f, 0.16f);
+                baseCut = 1300.0f; cutEnvAmt = 3000.0f; break;
+            default: // 0 Pluck
+                osc.wave = Wave::Saw; sub.wave = Wave::Square; subLevel = 0.30f;
+                amp.configure(sr, 0.003f, 0.11f, 0.0f, 0.12f);
+                fenv.configure(sr, 0.002f, 0.10f, 0.20f, 0.12f);
+                baseCut = 520.0f; cutEnvAmt = 5400.0f; break;
+        }
     }
     // gateSamples > 0 schedules an automatic note-off after that many samples.
     void noteOn(int n, float vel, int gateSamples) {
@@ -212,11 +240,11 @@ struct SynthVoice {
         float a = amp.next();
         if (!amp.active()) { busy = false; note = -1; return 0.0f; }
         float fe = fenv.next();
-        // Filter sweeps from base cutoff upward with the env; key a little too.
-        float base = 380.0f + 26.0f * static_cast<float>(note);
-        float cutoff = base + fe * 5200.0f * (0.4f + 0.6f * velocity);
+        // Filter sweeps from the preset's cutoff floor upward with the env; key-track a little.
+        float base = baseCut + 22.0f * static_cast<float>(note - 48);
+        float cutoff = base + fe * cutEnvAmt * (0.4f + 0.6f * velocity);
         filter.set(cutoff, 0.62f);
-        float raw = osc.next() + 0.5f * sub.next();
+        float raw = osc.next() + subLevel * sub.next();
         float filtered = filter.lp(raw * 0.5f);
         return filtered * a * velocity;
     }
@@ -380,6 +408,13 @@ struct ABAudioCore {
         samplesPerStep = (60.0 / b) * sr / 4.0;
     }
 
+    int synthPreset = 0;
+
+    void applyPreset(int p) {
+        synthPreset = p;
+        for (auto &v : voices) v.setPreset(p);
+    }
+
     SynthVoice *allocVoice() {
         for (auto &v : voices) if (!v.busy) return &v;
         // steal the first (simple, fine for M1)
@@ -455,6 +490,12 @@ void ab_core_clear(ABAudioCore *core) {
     if (!core) return;
     for (int t = 0; t < AB_NUM_TRACKS; ++t)
         for (int s = 0; s < AB_NUM_STEPS; ++s) core->steps[t][s] = {60, 0.0f};
+}
+
+void ab_core_set_synth_preset(ABAudioCore *core, int preset) {
+    if (!core) return;
+    if (preset < 0) preset = 0; else if (preset > 3) preset = 3;
+    core->applyPreset(preset);
 }
 
 void ab_core_note_on(ABAudioCore *core, int track, int midiNote, float velocity) {

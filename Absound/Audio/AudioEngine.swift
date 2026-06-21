@@ -69,6 +69,7 @@ final class AudioEngine {
 
     func setTempo(_ bpm: Double) { ab_core_set_tempo(core, bpm) }
     func setPlaying(_ playing: Bool) { ab_core_set_playing(core, playing ? 1 : 0) }
+    func setSynthPreset(_ preset: Int) { ab_core_set_synth_preset(core, Int32(preset)) }
     var currentStep: Int { Int(ab_core_current_step(core)) }
 
     func setStep(track: Int32, step: Int, note: Int, velocity: Int) {

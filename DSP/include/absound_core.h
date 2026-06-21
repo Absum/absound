@@ -44,6 +44,9 @@ int  ab_core_current_step(ABAudioCore *core);               /* 0..AB_NUM_STEPS-1
 void ab_core_set_step(ABAudioCore *core, int track, int step, int midiNote, int velocity);
 void ab_core_clear(ABAudioCore *core);
 
+/* Synth timbre. preset: 0=Pluck, 1=Bass, 2=Lead, 3=Keys (clamped). */
+void ab_core_set_synth_preset(ABAudioCore *core, int preset);
+
 /* Live one-shot trigger (used later by Highway/keyboard input). */
 void ab_core_note_on(ABAudioCore *core, int track, int midiNote, float velocity);
 

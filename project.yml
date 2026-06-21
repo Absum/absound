@@ -59,6 +59,7 @@ targets:
     sources:
       - path: Tests
       - path: DSP
+      - path: Absound/Theory/Scale.swift   # pure-logic source under test (no app host)
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
