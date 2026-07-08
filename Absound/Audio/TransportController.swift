@@ -38,6 +38,9 @@ final class TransportController: ObservableObject {
             else if !isPlaying { stopPolling(); meterLevels = [:]; masterLevel = 0 }
         }
     }
+    /// The continuous playhead publishes at 60 fps — only worth the whole-tree
+    /// invalidation while the Aurora Highway is on screen (it's the sole consumer).
+    var playheadEnabled = false
     @Published private(set) var project: Project
     @Published var selection: Selection
 
@@ -493,7 +496,11 @@ final class TransportController: ObservableObject {
     @objc private func tick() {
         let s = engine.currentStep
         if s != currentStep { currentStep = s }
-        playPosition = engine.playPosition
+        if playheadEnabled {
+            playPosition = engine.playPosition
+        } else if playPosition != -1 && !isPlaying {
+            playPosition = -1
+        }
         let p = engine.currentPattern
         if p != currentPattern { currentPattern = p }
         let sp = engine.songPosition

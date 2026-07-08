@@ -26,6 +26,9 @@ struct AuroraHighwayView: View {
             highway
             padStrip
         }
+        // The 60fps playhead stream only runs while the Highway is visible.
+        .onAppear { transport.playheadEnabled = true }
+        .onDisappear { transport.playheadEnabled = false }
     }
 
     // MARK: Controls (Rec arm + octave shift)

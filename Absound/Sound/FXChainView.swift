@@ -1,19 +1,27 @@
 //
 //  FXChainView.swift
 //  The insert-FX chain editor: ordered slot cards in signal flow, each with an
-//  enable toggle, per-effect named knobs, and a menu to change/move/remove.
-//  Used by the Sound Lab (per-sound chain) and the Mix tab (master chain).
+//  enable toggle, per-effect named knobs, and drag-to-reorder. Used by the
+//  Sound Lab (per-sound chain) and the Mix tab (per-sound + master chains).
+//
+//  Reordering works on a local working copy: mutating the live binding during a
+//  drag rebuilds the whole tree (transport publishes) and cancels the drop
+//  session — the "stuck dimmed card" bug. The working copy renders and moves;
+//  the binding is committed once, on drop (with catch-alls so a missed drop
+//  can never leave the UI stuck or the engine stale).
 //
 
 import SwiftUI
 
 struct FXChainView: View {
     @Binding var chain: [FXSlot]
+
+    @State private var working: [FXSlot] = []
     @State private var draggedSlot: UUID?
 
     var body: some View {
         VStack(spacing: 10) {
-            ForEach(Array(chain.enumerated()), id: \.element.id) { idx, slot in
+            ForEach(Array(working.enumerated()), id: \.element.id) { idx, slot in
                 slotCard(idx: idx, slot: slot)
                     .opacity(draggedSlot == slot.id ? 0.4 : 1)
                     .onDrag {
@@ -21,12 +29,12 @@ struct FXChainView: View {
                         return NSItemProvider(object: slot.id.uuidString as NSString)
                     }
                     .onDrop(of: [.text], delegate: FXReorderDelegate(
-                        item: slot.id, chain: $chain, dragged: $draggedSlot))
+                        item: slot.id, working: $working, dragged: $draggedSlot, commit: commit))
             }
-            if chain.count < Int(AB_MAX_FX) {
+            if working.count < Int(AB_MAX_FX) {
                 Menu {
                     ForEach(FXType.allCases) { t in
-                        Button { chain.append(FXSlot(type: t)) } label: { Label(t.name, systemImage: t.icon) }
+                        Button { working.append(FXSlot(type: t)); commit() } label: { Label(t.name, systemImage: t.icon) }
                     }
                 } label: {
                     Label("Add effect", systemImage: "plus")
@@ -37,11 +45,26 @@ struct FXChainView: View {
                             .stroke(Theme.teal.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                 }
             }
-            if chain.isEmpty {
+            if working.isEmpty {
                 Text("No effects — the signal passes through clean")
                     .font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.35))
             }
         }
+        // Catch-all: a drop that lands between cards still commits and un-dims.
+        .onDrop(of: [.text], isTargeted: nil) { _ in commit(); return true }
+        // Rescue: if a drag session dies without any drop event, the next tap clears it.
+        .simultaneousGesture(TapGesture().onEnded { if draggedSlot != nil { commit() } })
+        .onAppear { working = chain }
+        .onChange(of: chain) { _, newValue in
+            if draggedSlot == nil && newValue != working { working = newValue }
+        }
+    }
+
+    /// Push the working order/params to the real binding (engine + persistence)
+    /// and end any drag state.
+    private func commit() {
+        draggedSlot = nil
+        if chain != working { chain = working }
     }
 
     private func slotCard(idx: Int, slot: FXSlot) -> some View {
@@ -53,25 +76,25 @@ struct FXChainView: View {
                     .font(Theme.title(14)).foregroundStyle(slot.enabled ? Theme.cyan : Theme.frost.opacity(0.35))
                 Spacer()
                 Toggle("", isOn: Binding(
-                    get: { chain.indices.contains(idx) ? chain[idx].enabled : true },
-                    set: { if chain.indices.contains(idx) { chain[idx].enabled = $0 } }
+                    get: { working.indices.contains(idx) ? working[idx].enabled : true },
+                    set: { if working.indices.contains(idx) { working[idx].enabled = $0; commit() } }
                 ))
                 .labelsHidden().tint(Theme.teal).scaleEffect(0.75)
                 Menu {
                     Menu("Change effect") {
                         ForEach(FXType.allCases) { t in
-                            Button { if chain.indices.contains(idx) { chain[idx] = FXSlot(type: t) } } label: {
+                            Button { if working.indices.contains(idx) { working[idx] = FXSlot(type: t); commit() } } label: {
                                 Label(t.name, systemImage: t.icon)
                             }
                         }
                     }
                     if idx > 0 {
-                        Button { chain.swapAt(idx, idx - 1) } label: { Label("Move earlier", systemImage: "arrow.up") }
+                        Button { working.swapAt(idx, idx - 1); commit() } label: { Label("Move earlier", systemImage: "arrow.up") }
                     }
-                    if idx < chain.count - 1 {
-                        Button { chain.swapAt(idx, idx + 1) } label: { Label("Move later", systemImage: "arrow.down") }
+                    if idx < working.count - 1 {
+                        Button { working.swapAt(idx, idx + 1); commit() } label: { Label("Move later", systemImage: "arrow.down") }
                     }
-                    Button(role: .destructive) { chain.remove(at: idx) } label: { Label("Remove", systemImage: "trash") }
+                    Button(role: .destructive) { working.remove(at: idx); commit() } label: { Label("Remove", systemImage: "trash") }
                 } label: {
                     Image(systemName: "ellipsis.circle").foregroundStyle(Theme.frost.opacity(0.7))
                 }
@@ -82,8 +105,13 @@ struct FXChainView: View {
                         if let spec = slot.type.params[safeIndex: p] ?? nil {
                             ArcticKnob(spec.label,
                                        value: Binding(
-                                           get: { chain.indices.contains(idx) ? chain[idx][param: p] : spec.def },
-                                           set: { if chain.indices.contains(idx) { chain[idx][param: p] = $0 } }
+                                           get: { working.indices.contains(idx) ? working[idx][param: p] : spec.def },
+                                           set: {
+                                               if working.indices.contains(idx) {
+                                                   working[idx][param: p] = $0
+                                                   if draggedSlot == nil && chain != working { chain = working }
+                                               }
+                                           }
                                        ),
                                        range: spec.range,
                                        curve: spec.log ? .log : .linear,
@@ -99,6 +127,26 @@ struct FXChainView: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(slot.enabled ? 0.06 : 0.03)))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.frost.opacity(0.1), lineWidth: 1))
     }
+}
+
+/// Live-reorders the *working copy* as a dragged card hovers; the binding is
+/// committed once on drop.
+private struct FXReorderDelegate: DropDelegate {
+    let item: UUID
+    @Binding var working: [FXSlot]
+    @Binding var dragged: UUID?
+    let commit: () -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged, dragged != item,
+              let from = working.firstIndex(where: { $0.id == dragged }),
+              let to = working.firstIndex(where: { $0.id == item }) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            working.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        }
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func performDrop(info: DropInfo) -> Bool { commit(); return true }
 }
 
 /// Compact, read-only chain summary (Simple view / mixer strips).
@@ -122,22 +170,4 @@ struct FXChainSummary: View {
 
 private extension Array {
     subscript(safeIndex i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
-}
-
-/// Live-reorders the chain as a dragged slot card hovers over another.
-private struct FXReorderDelegate: DropDelegate {
-    let item: UUID
-    @Binding var chain: [FXSlot]
-    @Binding var dragged: UUID?
-
-    func dropEntered(info: DropInfo) {
-        guard let dragged, dragged != item,
-              let from = chain.firstIndex(where: { $0.id == dragged }),
-              let to = chain.firstIndex(where: { $0.id == item }) else { return }
-        withAnimation(.easeInOut(duration: 0.15)) {
-            chain.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-        }
-    }
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-    func performDrop(info: DropInfo) -> Bool { dragged = nil; return true }
 }
