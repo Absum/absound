@@ -60,7 +60,9 @@ struct PatternStudioView: View {
     private var portraitBody: some View {
         VStack(spacing: 10) {
             topBar
-            LayerStrip(transport: transport)
+            LayerStrip(transport: transport,
+                       editSound: { transport.select($0); showSoundLab = true },
+                       changeSound: { transport.select($0); showBrowser = true })
             contextualControls
             editorArea.frame(maxHeight: .infinity)
             transportBar
@@ -246,6 +248,8 @@ private struct PatternChips: View {
 
 private struct LayerStrip: View {
     @ObservedObject var transport: TransportController
+    var editSound: (UUID) -> Void = { _ in }
+    var changeSound: (UUID) -> Void = { _ in }
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -253,6 +257,9 @@ private struct LayerStrip: View {
                     chip(l.displayName, selected: transport.selectedLayerId == l.id,
                          muted: l.muted, soloed: l.soloed, accent: Theme.cyan) { transport.select(l.id) }
                         .contextMenu {
+                            Button { editSound(l.id) } label: { Label("Edit sound", systemImage: "slider.vertical.3") }
+                            Button { changeSound(l.id) } label: { Label("Change sound", systemImage: "waveform") }
+                            Divider()
                             Button { transport.toggleMute(l.id) } label: {
                                 Label(l.muted ? "Unmute" : "Mute", systemImage: l.muted ? "speaker.slash" : "speaker.wave.2")
                             }
