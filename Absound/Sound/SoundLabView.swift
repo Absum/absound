@@ -15,6 +15,7 @@ import SwiftUI
 struct SoundLabView: View {
     @ObservedObject var transport: TransportController
     @EnvironmentObject var library: PatchLibrary
+    @EnvironmentObject var toast: ToastCenter
     @Environment(\.dismiss) private var dismiss
 
     let standalone: Bool
@@ -133,17 +134,21 @@ struct SoundLabView: View {
         if standalone {
             if isSavedUserPatch {
                 library.save(draft)
+                toast.show("Sound changes saved")
             } else {
                 draft = library.saveAsCopy(of: draft)   // keep editing the saved copy
+                toast.show("Saved to My Sounds as \"\(draft.name)\"")
             }
             original = draft
         } else {
             guard let layerId = transport.selectedLayerId else { return }
             if isSavedUserPatch {
                 library.save(current)
+                toast.show("Sound changes saved")
             } else {
                 let copy = library.saveAsCopy(of: current)
                 transport.applyPatch(layerId, patch: copy)
+                toast.show("Saved to My Sounds as \"\(copy.name)\"")
             }
             original = transport.selectedPatch
         }
@@ -157,6 +162,7 @@ struct SoundLabView: View {
         } else if let layerId = transport.selectedLayerId {
             transport.applyPatch(layerId, patch: o)
         }
+        toast.show("Changes reverted", icon: "arrow.uturn.backward.circle.fill")
     }
 
     private func rename() {
@@ -166,6 +172,7 @@ struct SoundLabView: View {
         p.name = trimmed
         patch.wrappedValue = p
         if isSavedUserPatch { library.rename(p.id, to: trimmed) }
+        toast.show("Renamed to \"\(trimmed)\"", icon: "pencil.circle.fill")
     }
 
     // MARK: - Advanced sections

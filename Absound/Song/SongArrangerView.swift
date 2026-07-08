@@ -17,7 +17,9 @@ struct SongArrangerView: View {
         self.playhead = transport.playhead
     }
     @EnvironmentObject var songLibrary: SongLibrary
+    @EnvironmentObject var toast: ToastCenter
     @State private var showSongs = false
+    @State private var confirmClearSong = false
     @State private var midiExport: MidiExportItem?
 
     private var song: [Int] { transport.project.song }
@@ -55,6 +57,14 @@ struct SongArrangerView: View {
         .sheet(item: $midiExport) { item in
             ShareSheet(url: item.url)
                 .presentationDetents([.medium])
+        }
+        .confirmationDialog("Clear the whole arrangement? (Patterns are kept.)",
+                            isPresented: $confirmClearSong, titleVisibility: .visible) {
+            Button("Clear arrangement", role: .destructive) {
+                transport.clearSong()
+                toast.show("Arrangement cleared", icon: "trash.circle.fill")
+            }
+            Button("Cancel", role: .cancel) {}
         }
         .onAppear { transport.onAppear() }
     }
@@ -95,7 +105,10 @@ struct SongArrangerView: View {
                     HStack(spacing: 8) {
                         ForEach(Array(song.enumerated()), id: \.offset) { i, patternIdx in
                             let playing = transport.songPlaying && playhead.songPosition == i
-                            Button { transport.removeSection(at: i) } label: {
+                            Button {
+                                transport.removeSection(at: i)
+                                toast.show("Section removed", icon: "trash.circle.fill")
+                            } label: {
                                 Text(names.indices.contains(patternIdx) ? names[patternIdx] : "?")
                                     .font(Theme.title(18))
                                     .foregroundStyle(playing ? Theme.bgTop : Theme.frost)
@@ -118,9 +131,11 @@ struct SongArrangerView: View {
     private struct SongsSheet: View {
         @ObservedObject var transport: TransportController
         @EnvironmentObject var library: SongLibrary
+        @EnvironmentObject var toast: ToastCenter
         @Environment(\.dismiss) private var dismiss
 
         @State private var renameTarget: Project?
+        @State private var deleteTarget: Project?
         @State private var newName = ""
         @State private var renamingCurrent = false
 
@@ -144,6 +159,7 @@ struct SongArrangerView: View {
                             }
                             Button {
                                 library.save(transport.project)
+                                toast.show("\"\(transport.project.name)\" saved to library")
                             } label: {
                                 Label("Save to library", systemImage: "square.and.arrow.down")
                                     .foregroundStyle(Theme.teal)
@@ -151,6 +167,7 @@ struct SongArrangerView: View {
                             Button {
                                 stashCurrent()
                                 transport.loadProject(Project.blank(name: library.uniqueName("New Song")))
+                                toast.show("New song — previous saved to library", icon: "plus.circle.fill")
                                 dismiss()
                             } label: {
                                 Label("New song", systemImage: "plus").foregroundStyle(Theme.cyan)
@@ -165,6 +182,7 @@ struct SongArrangerView: View {
                                     guard s.id != transport.project.id else { dismiss(); return }
                                     stashCurrent()
                                     transport.loadProject(s)
+                                    toast.show("Loaded \"\(s.name)\"", icon: "folder.circle.fill")
                                     dismiss()
                                 } label: {
                                     HStack {
@@ -179,7 +197,7 @@ struct SongArrangerView: View {
                                 }
                                 .contextMenu {
                                     Button { newName = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
-                                    Button(role: .destructive) { library.delete(s.id) } label: { Label("Delete", systemImage: "trash") }
+                                    Button(role: .destructive) { deleteTarget = s } label: { Label("Delete", systemImage: "trash") }
                                 }
                             }
                         }
@@ -198,12 +216,27 @@ struct SongArrangerView: View {
                         if renamingCurrent {
                             transport.renameProject(newName)
                             if library.contains(transport.project.id) { library.rename(transport.project.id, to: newName) }
+                            toast.show("Renamed to \"\(newName)\"", icon: "pencil.circle.fill")
                         } else if let t = renameTarget {
                             library.rename(t.id, to: newName)
+                            toast.show("Renamed to \"\(newName)\"", icon: "pencil.circle.fill")
                         }
                         renameTarget = nil; renamingCurrent = false
                     }
                     Button("Cancel", role: .cancel) { renameTarget = nil; renamingCurrent = false }
+                }
+                .confirmationDialog("Delete \"\(deleteTarget?.name ?? "")\" from the library? This cannot be undone.",
+                                    isPresented: Binding(get: { deleteTarget != nil },
+                                                         set: { if !$0 { deleteTarget = nil } }),
+                                    titleVisibility: .visible) {
+                    Button("Delete song", role: .destructive) {
+                        if let t = deleteTarget {
+                            library.delete(t.id)
+                            toast.show("\"\(t.name)\" deleted", icon: "trash.circle.fill")
+                        }
+                        deleteTarget = nil
+                    }
+                    Button("Cancel", role: .cancel) { deleteTarget = nil }
                 }
             }
             .presentationDetents([.medium, .large])
@@ -246,7 +279,7 @@ struct SongArrangerView: View {
                 .background(Capsule().fill(Color.white.opacity(0.07)))
             }
             if !song.isEmpty {
-                Button { transport.clearSong() } label: {
+                Button { confirmClearSong = true } label: {
                     Text("Clear").font(Theme.body(14)).foregroundStyle(Theme.frost.opacity(0.7))
                         .padding(.vertical, 9).padding(.horizontal, 16)
                         .background(Capsule().fill(Color.white.opacity(0.07)))

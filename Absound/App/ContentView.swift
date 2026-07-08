@@ -11,6 +11,7 @@ struct ContentView: View {
     @StateObject private var transport = TransportController()
     @StateObject private var patchLibrary = PatchLibrary()
     @StateObject private var songLibrary = SongLibrary()
+    @StateObject private var toast = ToastCenter()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -32,6 +33,8 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .environmentObject(patchLibrary)
         .environmentObject(songLibrary)
+        .environmentObject(toast)
+        .overlay { ToastOverlay().environmentObject(toast) }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive { transport.saveNow() }
         }

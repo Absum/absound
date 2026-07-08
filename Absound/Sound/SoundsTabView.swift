@@ -10,9 +10,11 @@ import SwiftUI
 struct SoundsTabView: View {
     @ObservedObject var transport: TransportController
     @EnvironmentObject var library: PatchLibrary
+    @EnvironmentObject var toast: ToastCenter
 
     @State private var labPatch: SynthPatch?
     @State private var renameTarget: SynthPatch?
+    @State private var deleteTarget: SynthPatch?
     @State private var newName = ""
 
     private let columns = [GridItem(.adaptive(minimum: 104), spacing: 10)]
@@ -47,10 +49,26 @@ struct SoundsTabView: View {
         )) {
             TextField("Name", text: $newName)
             Button("Rename") {
-                if let t = renameTarget { library.rename(t.id, to: newName) }
+                if let t = renameTarget {
+                    library.rename(t.id, to: newName)
+                    toast.show("Renamed to \"\(newName)\"", icon: "pencil.circle.fill")
+                }
                 renameTarget = nil
             }
             Button("Cancel", role: .cancel) { renameTarget = nil }
+        }
+        .confirmationDialog("Delete \"\(deleteTarget?.name ?? "")\"? Layers using it keep their copy.",
+                            isPresented: Binding(get: { deleteTarget != nil },
+                                                 set: { if !$0 { deleteTarget = nil } }),
+                            titleVisibility: .visible) {
+            Button("Delete sound", role: .destructive) {
+                if let t = deleteTarget {
+                    library.delete(t.id)
+                    toast.show("\"\(t.name)\" deleted", icon: "trash.circle.fill")
+                }
+                deleteTarget = nil
+            }
+            Button("Cancel", role: .cancel) { deleteTarget = nil }
         }
         .onAppear { transport.onAppear() }
     }
@@ -79,7 +97,7 @@ struct SoundsTabView: View {
                                 Button { newName = p.name; renameTarget = p } label: {
                                     Label("Rename", systemImage: "pencil")
                                 }
-                                Button(role: .destructive) { library.delete(p.id) } label: {
+                                Button(role: .destructive) { deleteTarget = p } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }

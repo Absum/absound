@@ -15,6 +15,9 @@ struct PatternStudioView: View {
     @State private var showBrowser = false
     @State private var showSoundLab = false
     @State private var midiExport: MidiExportItem?
+    @State private var confirmClear = false
+    @State private var confirmRemoveLayer: UUID?
+    @EnvironmentObject var toast: ToastCenter
     @Environment(\.verticalSizeClass) private var vSize
 
     enum MelodyMode: String, CaseIterable { case roll = "Roll", play = "Play" }
@@ -42,6 +45,28 @@ struct PatternStudioView: View {
         }
         .fullScreenCover(isPresented: $showSoundLab) { SoundLabView(transport: transport) }
         .sheet(item: $midiExport) { item in ShareSheet(url: item.url).presentationDetents([.medium]) }
+        .confirmationDialog(clearDialogTitle, isPresented: $confirmClear, titleVisibility: .visible) {
+            Button(clearLabel, role: .destructive) {
+                transport.clearCurrent()
+                toast.show(transport.selection == .drums ? "All drum lanes cleared" : "Layer cleared",
+                           icon: "trash.circle.fill")
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Remove this layer? Its notes are deleted from every pattern.",
+                            isPresented: Binding(get: { confirmRemoveLayer != nil },
+                                                 set: { if !$0 { confirmRemoveLayer = nil } }),
+                            titleVisibility: .visible) {
+            Button("Remove layer", role: .destructive) {
+                if let id = confirmRemoveLayer {
+                    let name = transport.project.layers.first { $0.id == id }?.displayName ?? "Layer"
+                    transport.removeTrack(id)
+                    toast.show("\"\(name)\" removed", icon: "trash.circle.fill")
+                }
+                confirmRemoveLayer = nil
+            }
+            Button("Cancel", role: .cancel) { confirmRemoveLayer = nil }
+        }
         .onAppear {
             transport.onAppear()
             #if DEBUG
@@ -70,6 +95,15 @@ struct PatternStudioView: View {
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 10)
     }
 
+    private var clearLabel: String {
+        transport.selection == .drums ? "Clear all drums" : "Clear this layer"
+    }
+    private var clearDialogTitle: String {
+        transport.selection == .drums
+            ? "Clear every drum lane in this pattern?"
+            : "Clear all notes on this layer in this pattern?"
+    }
+
     private var topBar: some View {
         HStack(spacing: 8) {
             Button { showSettings = true } label: {
@@ -92,7 +126,9 @@ struct PatternStudioView: View {
                     if let url = MidiExport.export(transport.project) { midiExport = MidiExportItem(url: url) }
                 } label: { Label("Export MIDI", systemImage: "square.and.arrow.up") }
                 Divider()
-                Button(role: .destructive) { transport.clearCurrent() } label: { Label("Clear this layer", systemImage: "trash") }
+                Button(role: .destructive) { confirmClear = true } label: {
+                    Label(clearLabel, systemImage: "trash")
+                }
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.frost)
                     .frame(width: 34, height: 34).background(Circle().fill(Color.white.opacity(0.07)))
@@ -123,7 +159,10 @@ struct PatternStudioView: View {
             Button { showSoundLab = true } label: { Label("Edit sound", systemImage: "slider.vertical.3") }
             Button { showBrowser = true } label: { Label("Change sound", systemImage: "waveform") }
             Divider()
-            Button { transport.generateMelody() } label: { Label("Generate melody", systemImage: "sparkles") }
+            Button {
+                transport.generateMelody()
+                toast.show("New melody generated", icon: "sparkles")
+            } label: { Label("Generate melody", systemImage: "sparkles") }
             Button { transport.showShadow.toggle() } label: {
                 Label(transport.showShadow ? "Hide other layers" : "Show other layers", systemImage: "square.stack.3d.up")
             }
@@ -134,7 +173,7 @@ struct PatternStudioView: View {
                 Label(layer.soloed ? "Unsolo" : "Solo", systemImage: "headphones")
             }
             Divider()
-            Button(role: .destructive) { transport.removeTrack(layer.id) } label: { Label("Remove layer", systemImage: "minus.circle") }
+            Button(role: .destructive) { confirmRemoveLayer = layer.id } label: { Label("Remove layer", systemImage: "minus.circle") }
         } label: {
             Image(systemName: "ellipsis.circle").font(.system(size: 20)).foregroundStyle(Theme.frost.opacity(0.85))
                 .frame(width: 38, height: 34)
