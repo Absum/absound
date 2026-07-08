@@ -24,6 +24,7 @@ struct SongArrangerView: View {
     @State private var midiExport: MidiExportItem?
     @State private var workingSong: [SectionItem] = []
     @State private var draggedSection: UUID?
+    @State private var dropSessionActive = false
 
     struct SectionItem: Identifiable, Equatable {
         let id: UUID
@@ -173,7 +174,15 @@ struct SongArrangerView: View {
                     }
                     .padding(.vertical, 2)
                 }
-                .onDrop(of: [.text], isTargeted: nil) { _ in commitOrder(); return true }
+                .onDrop(of: [.text], isTargeted: $dropSessionActive) { _ in commitOrder(); return true }
+                .onChange(of: dropSessionActive) { _, active in
+                    // The session signal reliably ends when the finger lifts anywhere —
+                    // commit + un-dim even when performDrop never fires (SwiftUI wart).
+                    if !active && draggedSection != nil {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { commitOrder() }
+                    }
+                }
+                .simultaneousGesture(TapGesture().onEnded { if draggedSection != nil { commitOrder() } })
             }
         }
     }

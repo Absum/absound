@@ -19,6 +19,7 @@ struct FXChainView: View {
     @State private var working: [FXSlot] = []
     @State private var draggedSlot: UUID?
     @State private var confirmRemove: UUID?
+    @State private var dropSessionActive = false
     @EnvironmentObject var toast: ToastCenter
 
     var body: some View {
@@ -53,7 +54,12 @@ struct FXChainView: View {
             }
         }
         // Catch-all: a drop that lands between cards still commits and un-dims.
-        .onDrop(of: [.text], isTargeted: nil) { _ in commit(); return true }
+        .onDrop(of: [.text], isTargeted: $dropSessionActive) { _ in commit(); return true }
+        .onChange(of: dropSessionActive) { _, active in
+            if !active && draggedSlot != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { commit() }
+            }
+        }
         // Rescue: if a drag session dies without any drop event, the next tap clears it.
         .simultaneousGesture(TapGesture().onEnded { if draggedSlot != nil { commit() } })
         .confirmationDialog(
