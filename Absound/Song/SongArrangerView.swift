@@ -20,8 +20,15 @@ struct SongArrangerView: View {
     @EnvironmentObject var toast: ToastCenter
     @State private var showSongs = false
     @State private var confirmClearSong = false
-    @State private var confirmRemoveSection: Int?
+    @State private var confirmRemoveSection: UUID?
     @State private var midiExport: MidiExportItem?
+    @State private var workingSong: [SectionItem] = []
+    @State private var draggedSection: UUID?
+
+    struct SectionItem: Identifiable, Equatable {
+        let id: UUID
+        var pattern: Int
+    }
 
     private var song: [Int] { transport.project.song }
     private var names: [String] { transport.patternNames }
@@ -60,12 +67,13 @@ struct SongArrangerView: View {
                 .presentationDetents([.medium])
         }
         .confirmationDialog(
-            "Remove section \((confirmRemoveSection ?? 0) + 1) from the arrangement?",
+            "Remove this section from the arrangement?",
             isPresented: Binding(get: { confirmRemoveSection != nil },
                                  set: { if !$0 { confirmRemoveSection = nil } }),
             titleVisibility: .visible) {
             Button("Remove section", role: .destructive) {
-                if let i = confirmRemoveSection {
+                if let id = confirmRemoveSection,
+                   let i = workingSong.firstIndex(where: { $0.id == id }) {
                     transport.removeSection(at: i)
                     toast.show("Section removed", icon: "trash.circle.fill")
                 }
@@ -81,7 +89,29 @@ struct SongArrangerView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .onAppear { transport.onAppear() }
+        .onAppear {
+            transport.onAppear()
+            syncWorkingSong()
+        }
+        .onChange(of: transport.project.song) { _, _ in
+            if draggedSection == nil { syncWorkingSong() }
+        }
+    }
+
+    private func syncWorkingSong() {
+        // Rebuild only when the pattern sequence actually differs, to keep ids stable.
+        if workingSong.map(\.pattern) != song {
+            workingSong = song.map { SectionItem(id: UUID(), pattern: $0) }
+        }
+    }
+
+    private func commitOrder() {
+        draggedSection = nil
+        let order = workingSong.map(\.pattern)
+        if order != song {
+            transport.setSongOrder(order)
+            toast.show("Arrangement reordered", icon: "arrow.left.arrow.right.circle.fill")
+        }
     }
 
     // Tap a pattern to append it as a section.
@@ -107,7 +137,7 @@ struct SongArrangerView: View {
                 Text("ARRANGEMENT").font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.5)).tracking(1)
                 Spacer()
                 if !song.isEmpty {
-                    Text("tap a section to remove").font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.35))
+                    Text("tap to remove · hold to reorder").font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.35))
                 }
             }
             if song.isEmpty {
@@ -118,12 +148,12 @@ struct SongArrangerView: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(Array(song.enumerated()), id: \.offset) { i, patternIdx in
+                        ForEach(Array(workingSong.enumerated()), id: \.element.id) { i, item in
                             let playing = transport.songPlaying && playhead.songPosition == i
                             Button {
-                                confirmRemoveSection = i
+                                confirmRemoveSection = item.id
                             } label: {
-                                Text(names.indices.contains(patternIdx) ? names[patternIdx] : "?")
+                                Text(names.indices.contains(item.pattern) ? names[item.pattern] : "?")
                                     .font(Theme.title(18))
                                     .foregroundStyle(playing ? Theme.bgTop : Theme.frost)
                                     .frame(width: 52, height: 70)
@@ -132,10 +162,18 @@ struct SongArrangerView: View {
                                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.frost.opacity(0.15), lineWidth: 1))
                                     .shadow(color: playing ? Theme.teal.opacity(0.7) : .clear, radius: 8)
                             }
+                            .opacity(draggedSection == item.id ? 0.4 : 1)
+                            .onDrag {
+                                draggedSection = item.id
+                                return NSItemProvider(object: item.id.uuidString as NSString)
+                            }
+                            .onDrop(of: [.text], delegate: SectionReorderDelegate(
+                                item: item.id, working: $workingSong, dragged: $draggedSection, commit: commitOrder))
                         }
                     }
                     .padding(.vertical, 2)
                 }
+                .onDrop(of: [.text], isTargeted: nil) { _ in commitOrder(); return true }
             }
         }
     }
@@ -316,4 +354,24 @@ struct ShareSheet: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: [url], applicationActivities: nil)
     }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}
+
+
+/// Live-reorders the working arrangement as a dragged section hovers; committed on drop.
+private struct SectionReorderDelegate: DropDelegate {
+    let item: UUID
+    @Binding var working: [SongArrangerView.SectionItem]
+    @Binding var dragged: UUID?
+    let commit: () -> Void
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged, dragged != item,
+              let from = working.firstIndex(where: { $0.id == dragged }),
+              let to = working.firstIndex(where: { $0.id == item }) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            working.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        }
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func performDrop(info: DropInfo) -> Bool { commit(); return true }
 }

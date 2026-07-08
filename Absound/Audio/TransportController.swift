@@ -315,6 +315,13 @@ final class TransportController: ObservableObject {
         engine.setSong(project.song)
         if project.song.isEmpty && songPlaying { stop() }
     }
+
+    /// Replace the whole arrangement order (drag-to-reorder commit).
+    func setSongOrder(_ order: [Int]) {
+        let valid = order.filter { project.patterns.indices.contains($0) }
+        project.song = valid
+        engine.setSong(valid)
+    }
     func clearSong() { project.song.removeAll(); engine.setSong(project.song); if songPlaying { stop() } }
 
     // MARK: - Editing: melody (selected synth layer, current pattern)
