@@ -10,10 +10,25 @@ import Combine
 import Foundation
 import QuartzCore
 
+/// Fast-changing playback state, isolated so that only the rendering surfaces
+/// (grids, highway, arranger highlight, meters) rebuild during playback — the
+/// control chrome observes TransportController alone and stays interactive.
+@MainActor
+final class PlayheadState: ObservableObject {
+    @Published var currentStep = -1
+    @Published var playPosition: Double = -1
+    @Published var currentPattern = 0
+    @Published var songPosition = -1
+    @Published var meterLevels: [UUID: Float] = [:]
+    @Published var masterLevel: Float = 0
+}
+
 @MainActor
 final class TransportController: ObservableObject {
 
     enum Selection: Equatable { case track(UUID); case drums }
+
+    let playhead = PlayheadState()
 
     @Published private(set) var isPlaying = false
     @Published private(set) var songPlaying = false
@@ -23,23 +38,16 @@ final class TransportController: ObservableObject {
             if project.tempo != tempo { project.tempo = tempo }   // keep persisted copy in sync
         }
     }
-    @Published private(set) var currentStep = -1
-    @Published private(set) var playPosition: Double = -1
-    @Published private(set) var currentPattern = 0
-    @Published private(set) var songPosition = -1
     @Published var isRecording = false
     @Published var showShadow = true
-    // Metering (polled only while the Mix tab is visible).
-    @Published private(set) var meterLevels: [UUID: Float] = [:]
-    @Published private(set) var masterLevel: Float = 0
     var metersEnabled = false {
         didSet {
             if metersEnabled { startPolling() }
-            else if !isPlaying { stopPolling(); meterLevels = [:]; masterLevel = 0 }
+            else if !isPlaying { stopPolling(); playhead.meterLevels = [:]; playhead.masterLevel = 0 }
         }
     }
-    /// The continuous playhead publishes at 60 fps — only worth the whole-tree
-    /// invalidation while the Aurora Highway is on screen (it's the sole consumer).
+    /// The continuous playhead publishes at 60 fps — only worth it while the
+    /// Aurora Highway is on screen (its sole consumer).
     var playheadEnabled = false
     @Published private(set) var project: Project
     @Published var selection: Selection
@@ -187,7 +195,7 @@ final class TransportController: ObservableObject {
 
     func stop() {
         engine.setPlaying(false); isPlaying = false; songPlaying = false
-        stopPolling(); currentStep = -1; playPosition = -1
+        stopPolling(); playhead.currentStep = -1; playhead.playPosition = -1
     }
     func setTempo(_ bpm: Double) { tempo = min(max(bpm, 60), 200) }
 
@@ -396,8 +404,8 @@ final class TransportController: ObservableObject {
     func toggleRecord() { isRecording.toggle() }
     func highwayTap(row: Int) {
         audition(row: row)
-        guard isRecording, isPlaying, playPosition >= 0 else { return }
-        placeMelody(row: row, step: Int(playPosition.rounded()) % stepCount)
+        guard isRecording, isPlaying, playhead.playPosition >= 0 else { return }
+        placeMelody(row: row, step: Int(playhead.playPosition.rounded()) % stepCount)
     }
 
     // MARK: - Editing: drums
@@ -495,21 +503,21 @@ final class TransportController: ObservableObject {
 
     @objc private func tick() {
         let s = engine.currentStep
-        if s != currentStep { currentStep = s }
+        if s != playhead.currentStep { playhead.currentStep = s }
         if playheadEnabled {
-            playPosition = engine.playPosition
-        } else if playPosition != -1 && !isPlaying {
-            playPosition = -1
+            playhead.playPosition = engine.playPosition
+        } else if playhead.playPosition != -1 && !isPlaying {
+            playhead.playPosition = -1
         }
         let p = engine.currentPattern
-        if p != currentPattern { currentPattern = p }
+        if p != playhead.currentPattern { playhead.currentPattern = p }
         let sp = engine.songPosition
-        if sp != songPosition { songPosition = sp }
+        if sp != playhead.songPosition { playhead.songPosition = sp }
         if metersEnabled {
             var levels: [UUID: Float] = [:]
             for l in project.layers { levels[l.id] = engine.trackLevel(l.engineId) }
-            meterLevels = levels
-            masterLevel = engine.masterLevel
+            playhead.meterLevels = levels
+            playhead.masterLevel = engine.masterLevel
         }
     }
 }

@@ -12,6 +12,12 @@ import SwiftUI
 
 struct AuroraHighwayView: View {
     @ObservedObject var transport: TransportController
+    @ObservedObject var playhead: PlayheadState
+
+    init(transport: TransportController) {
+        self.transport = transport
+        self.playhead = transport.playhead
+    }
 
     /// Octave offset (in scale degrees) of the lowest visible lane.
     @State private var octaveBase = 0
@@ -71,7 +77,7 @@ struct AuroraHighwayView: View {
             let topMargin: CGFloat = 8
             let nowY = size.height - 6
             let span = CGFloat(Project.stepCount)     // whole loop visible
-            let pos = transport.playPosition          // -1 when stopped
+            let pos = playhead.playPosition          // -1 when stopped
             let ctxM = transport.context
 
             // Lane separators + root-lane tint.

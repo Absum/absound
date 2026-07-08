@@ -10,6 +10,12 @@ import SwiftUI
 
 struct SongArrangerView: View {
     @ObservedObject var transport: TransportController
+    @ObservedObject var playhead: PlayheadState
+
+    init(transport: TransportController) {
+        self.transport = transport
+        self.playhead = transport.playhead
+    }
     @EnvironmentObject var songLibrary: SongLibrary
     @State private var showSongs = false
     @State private var midiExport: MidiExportItem?
@@ -88,7 +94,7 @@ struct SongArrangerView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(Array(song.enumerated()), id: \.offset) { i, patternIdx in
-                            let playing = transport.songPlaying && transport.songPosition == i
+                            let playing = transport.songPlaying && playhead.songPosition == i
                             Button { transport.removeSection(at: i) } label: {
                                 Text(names.indices.contains(patternIdx) ? names[patternIdx] : "?")
                                     .font(Theme.title(18))

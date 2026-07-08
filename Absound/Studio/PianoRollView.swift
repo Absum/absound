@@ -11,6 +11,13 @@ import SwiftUI
 
 struct PianoRollView: View {
     @ObservedObject var transport: TransportController
+    @ObservedObject var playhead: PlayheadState
+
+    init(transport: TransportController, rowHeight: CGFloat = 30) {
+        self.transport = transport
+        self.playhead = transport.playhead
+        self.rowHeight = rowHeight
+    }
     var rowHeight: CGFloat = 30
     private let gutter: CGFloat = 42
     @State private var didDrag = false
@@ -85,7 +92,7 @@ struct PianoRollView: View {
                 let path = Path(roundedRect: rect, cornerRadius: 4)
                 let on = melody[step] == row
                 let ghost = others.contains { $0[step] == row }
-                let playh = step == transport.currentStep
+                let playh = step == playhead.currentStep
                 if on {
                     ctx.fill(path, with: .color(Theme.cyan.opacity(playh ? 1.0 : 0.85)))
                 } else if ghost {
@@ -103,6 +110,13 @@ struct PianoRollView: View {
 
 struct DrumLanesView: View {
     @ObservedObject var transport: TransportController
+    @ObservedObject var playhead: PlayheadState
+
+    init(transport: TransportController, rowHeight: CGFloat = 34) {
+        self.transport = transport
+        self.playhead = transport.playhead
+        self.rowHeight = rowHeight
+    }
     var rowHeight: CGFloat = 34
     private let gutter: CGFloat = 58
     @State private var didDrag = false
@@ -169,7 +183,7 @@ struct DrumLanesView: View {
                 let rect = CGRect(x: x + 1, y: y + 3, width: stepW - 2, height: rowHeight - 6)
                 let path = Path(roundedRect: rect, cornerRadius: 4)
                 let on = hits[step]
-                let playh = step == transport.currentStep
+                let playh = step == playhead.currentStep
                 if on {
                     ctx.fill(path, with: .color(color.opacity(playh ? 1.0 : 0.85)))
                 } else {

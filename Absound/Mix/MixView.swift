@@ -59,6 +59,12 @@ struct MeterBar: View {
 
 struct MixView: View {
     @ObservedObject var transport: TransportController
+    @ObservedObject var playhead: PlayheadState
+
+    init(transport: TransportController) {
+        self.transport = transport
+        self.playhead = transport.playhead
+    }
 
     @State private var chainLayer: Layer?       // per-sound chain sheet target
     @State private var showMasterChain = false
@@ -111,7 +117,7 @@ struct MixView: View {
                 Spacer()
                 Button { showMasterChain = true } label: { fxButton }
             }
-            MeterBar(level: transport.masterLevel, height: 10)
+            MeterBar(level: playhead.masterLevel, height: 10)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 14).fill(Theme.teal.opacity(0.10)))
@@ -140,7 +146,7 @@ struct MixView: View {
                 knob("Delay", get: { dSend(layer) }, set: { setDSend(layer, $0) }, range: 0...1)
                 knob("Reverb", get: { rSend(layer) }, set: { setRSend(layer, $0) }, range: 0...1)
             }
-            MeterBar(level: transport.meterLevels[layer.id] ?? 0, height: 6)
+            MeterBar(level: playhead.meterLevels[layer.id] ?? 0, height: 6)
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.05)))
