@@ -1,10 +1,13 @@
 //
 //  SoundLabView.swift
-//  The synth editor. Simple view = 6 macro sliders for fast shaping; Advanced
-//  view = every ABPatch parameter in Arctic-styled sections. An in-key audition
-//  pad strip keeps each tweak audible. Edits apply live to the selected layer's
-//  patch; Save puts the sound into My Sounds (persisted), Revert restores the
-//  patch as it was when the Lab opened.
+//  The synth editor. Simple view = 6 macro sliders; Advanced = every ABPatch
+//  parameter. Live param-driven visualizations (waveform, filter curve, ADSR,
+//  LFO) make the patch visible as well as audible.
+//
+//  Two modes:
+//  - Layer mode (from the Studio): edits the selected layer's patch in place.
+//  - Standalone (from the Sounds tab): edits a draft against the engine's
+//    dedicated preview track — no layer needed; Save lands in My Sounds.
 //
 
 import SwiftUI
@@ -14,6 +17,8 @@ struct SoundLabView: View {
     @EnvironmentObject var library: PatchLibrary
     @Environment(\.dismiss) private var dismiss
 
+    let standalone: Bool
+    @State private var draft: SynthPatch
     @State private var mode: Mode = .simple
     @State private var original: SynthPatch?
     @State private var showRename = false
@@ -21,8 +26,20 @@ struct SoundLabView: View {
 
     enum Mode: String, CaseIterable { case simple = "Simple", advanced = "Advanced" }
 
+    init(transport: TransportController, standalone: Bool = false, initialPatch: SynthPatch? = nil) {
+        self.transport = transport
+        self.standalone = standalone
+        self._draft = State(initialValue: initialPatch ?? PatchFactory.presets[0])
+    }
+
     private var patch: Binding<SynthPatch> {
-        Binding(
+        if standalone {
+            return Binding(
+                get: { draft },
+                set: { draft = $0; transport.applyPreviewPatch($0) }
+            )
+        }
+        return Binding(
             get: { transport.selectedPatch ?? PatchFactory.presets[0] },
             set: { newValue in
                 if let id = transport.selectedLayerId { transport.applyPatch(id, patch: newValue) }
@@ -46,6 +63,7 @@ struct SoundLabView: View {
                     ScrollView {
                         VStack(spacing: 16) {
                             if mode == .simple {
+                                simpleHeaderViz
                                 MacroPanel(patch: patch)
                             } else {
                                 oscSection
@@ -57,8 +75,10 @@ struct SoundLabView: View {
                         }
                         .padding(.horizontal, 14).padding(.vertical, 12)
                     }
-                    AuditionPads(transport: transport)
-                        .padding(.horizontal, 14).padding(.bottom, 10)
+                    AuditionPads(transport: transport) { row in
+                        standalone ? transport.auditionPreview(row: row) : transport.audition(row: row)
+                    }
+                    .padding(.horizontal, 14).padding(.bottom, 10)
                 }
             }
             .navigationTitle(current.name)
@@ -87,34 +107,58 @@ struct SoundLabView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear { if original == nil { original = transport.selectedPatch } }
+        .onAppear {
+            if standalone { transport.applyPreviewPatch(draft) }
+            if original == nil { original = current }
+        }
+    }
+
+    /// Waveform + filter response side by side — the sound at a glance.
+    private var simpleHeaderViz: some View {
+        VStack(spacing: 8) {
+            WaveShapeView(patch: current, height: 76)
+            FilterCurveView(patch: current, height: 56)
+        }
     }
 
     // MARK: - Save / revert / rename
 
     private func save() {
-        guard let layerId = transport.selectedLayerId else { return }
-        if isSavedUserPatch {
-            library.save(current)                       // update in place
+        if standalone {
+            if isSavedUserPatch {
+                library.save(draft)
+            } else {
+                draft = library.saveAsCopy(of: draft)   // keep editing the saved copy
+            }
+            original = draft
         } else {
-            let copy = library.saveAsCopy(of: current)  // factory (or unsaved) -> new My Sound
-            transport.applyPatch(layerId, patch: copy)  // layer now tracks the saved copy
+            guard let layerId = transport.selectedLayerId else { return }
+            if isSavedUserPatch {
+                library.save(current)
+            } else {
+                let copy = library.saveAsCopy(of: current)
+                transport.applyPatch(layerId, patch: copy)
+            }
+            original = transport.selectedPatch
         }
-        original = transport.selectedPatch
     }
 
     private func revert() {
-        guard let layerId = transport.selectedLayerId, let o = original else { return }
-        transport.applyPatch(layerId, patch: o)
+        guard let o = original else { return }
+        if standalone {
+            draft = o
+            transport.applyPreviewPatch(o)
+        } else if let layerId = transport.selectedLayerId {
+            transport.applyPatch(layerId, patch: o)
+        }
     }
 
     private func rename() {
-        guard let layerId = transport.selectedLayerId else { return }
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         var p = current
         p.name = trimmed
-        transport.applyPatch(layerId, patch: p)
+        patch.wrappedValue = p
         if isSavedUserPatch { library.rename(p.id, to: trimmed) }
     }
 
@@ -122,6 +166,7 @@ struct SoundLabView: View {
 
     private var oscSection: some View {
         LabSection(title: "OSCILLATORS") {
+            WaveShapeView(patch: current)
             wavePicker("Osc 1", value: patch.osc1Wave)
             HStack(spacing: 10) {
                 ArcticKnob("Mix", value: patch.oscMix, range: 0...1)
@@ -141,6 +186,7 @@ struct SoundLabView: View {
 
     private var filterSection: some View {
         LabSection(title: "FILTER") {
+            FilterCurveView(patch: current)
             segmented(["LP", "BP", "HP"], value: patch.filterType)
             HStack(spacing: 10) {
                 ArcticKnob("Cutoff", value: patch.cutoff, range: 40...12000, curve: .log, format: "%.0f")
@@ -153,14 +199,22 @@ struct SoundLabView: View {
 
     private var envSection: some View {
         LabSection(title: "ENVELOPES") {
-            Text("Amp").font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.5))
+            HStack(spacing: 8) {
+                VStack(spacing: 4) {
+                    Text("Amp").font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.5))
+                    ADSRShapeView(a: current.ampA, d: current.ampD, s: current.ampS, r: current.ampR, color: Theme.cyan)
+                }
+                VStack(spacing: 4) {
+                    Text("Filter / Mod").font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.5))
+                    ADSRShapeView(a: current.modA, d: current.modD, s: current.modS, r: current.modR, color: Theme.steel)
+                }
+            }
             HStack(spacing: 10) {
                 ArcticKnob("A", value: patch.ampA, range: 0.001...1.5, curve: .log, format: "%.2fs")
                 ArcticKnob("D", value: patch.ampD, range: 0.01...1.5, curve: .log, format: "%.2fs")
                 ArcticKnob("S", value: patch.ampS, range: 0...1)
                 ArcticKnob("R", value: patch.ampR, range: 0.01...2, curve: .log, format: "%.2fs")
             }
-            Text("Filter / Mod").font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.5))
             HStack(spacing: 10) {
                 ArcticKnob("A", value: patch.modA, range: 0.001...1.5, curve: .log, format: "%.2fs")
                 ArcticKnob("D", value: patch.modD, range: 0.01...1.5, curve: .log, format: "%.2fs")
@@ -172,7 +226,9 @@ struct SoundLabView: View {
 
     private var modSection: some View {
         LabSection(title: "MOTION") {
+            LFOShapeView(patch: current)
             segmented(["Off", "Pitch", "Filter", "Volume", "Pan"], value: patch.lfoTarget)
+            segmented(["Sine", "Tri", "S&H"], value: patch.lfoShape)
             HStack(spacing: 10) {
                 ArcticKnob("Rate", value: patch.lfoRateHz, range: 0.05...20, curve: .log, format: "%.1fHz")
                 ArcticKnob("Depth", value: patch.lfoDepth, range: 0...1)
@@ -302,8 +358,10 @@ struct LabSection<Content: View>: View {
 
 // MARK: - Audition pads (in-key, root..octave)
 
-private struct AuditionPads: View {
+struct AuditionPads: View {
     @ObservedObject var transport: TransportController
+    var action: (Int) -> Void
+
     var body: some View {
         let ctx = transport.context
         let n = ctx.scale.degreeCount
@@ -311,7 +369,7 @@ private struct AuditionPads: View {
             ForEach(0...n, id: \.self) { deg in
                 let row = n + deg   // middle octave of the editor range
                 let isRoot = deg == 0 || deg == n
-                Button { transport.audition(row: row) } label: {
+                Button { action(row) } label: {
                     Text(ctx.noteName(forRow: row))
                         .font(Theme.body(11)).lineLimit(1).minimumScaleFactor(0.7)
                         .foregroundStyle(isRoot ? Theme.bgTop : Theme.frost)

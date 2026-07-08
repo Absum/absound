@@ -64,6 +64,8 @@ targets:
       # Pure-logic sources under test (no app host).
       - path: Absound/Theory/Scale.swift
       - path: Absound/Model/SynthPatch.swift
+      - path: Absound/Model/Pattern.swift
+      - path: Absound/Model/ProjectStore.swift
       - path: Absound/Sound/PatchLibrary.swift
     settings:
       base:

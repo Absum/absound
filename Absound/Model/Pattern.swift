@@ -24,11 +24,14 @@ enum DrumSound: Int, CaseIterable, Identifiable, Codable {
 /// drum layers keep the parametric DrumSound enum.
 struct Layer: Identifiable, Codable {
     var id = UUID()
-    var engineId: Int = -1
+    var engineId: Int = -1       // runtime engine slot — NOT persisted (re-registered on load)
     var kind: TrackKind
     var sound: Int               // DrumSound raw value (drum layers only)
     var patch: SynthPatch?       // synth layers only
     var muted: Bool = false
+
+    // engineId is a live handle; persisting it would route edits to wrong slots after a reload.
+    enum CodingKeys: String, CodingKey { case id, kind, sound, patch, muted }
 
     static func synth(_ patch: SynthPatch) -> Layer { Layer(kind: .synth, sound: 0, patch: patch) }
     static func drum(_ sound: DrumSound) -> Layer { Layer(kind: .drum, sound: sound.rawValue) }
@@ -67,6 +70,7 @@ struct Project: Codable {
     var contextRoot: Int
     var scaleRaw: String
     var baseOctave: Int
+    var tempo: Double = 112
     var layers: [Layer]
     var patterns: [PatternData]
     var song: [Int]                  // indices into `patterns`

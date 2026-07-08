@@ -10,25 +10,36 @@ struct ContentView: View {
     @State private var selection = 0
     @StateObject private var transport = TransportController()
     @StateObject private var patchLibrary = PatchLibrary()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         TabView(selection: $selection) {
             PatternStudioView(transport: transport)
                 .tag(0)
                 .tabItem { Label("Studio", systemImage: "square.grid.3x3.fill") }
-            SongArrangerView(transport: transport)
+            SoundsTabView(transport: transport)
                 .tag(1)
+                .tabItem { Label("Sounds", systemImage: "slider.vertical.3") }
+            SongArrangerView(transport: transport)
+                .tag(2)
                 .tabItem { Label("Song", systemImage: "rectangle.stack.fill") }
             ComingSoon(title: "Settings")
-                .tag(2)
+                .tag(3)
                 .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
         }
         .tint(Theme.teal)
         .preferredColorScheme(.dark)
         .environmentObject(patchLibrary)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background || phase == .inactive { transport.saveNow() }
+        }
         .onAppear {
             #if DEBUG
-            if ProcessInfo.processInfo.environment["ABSOUND_START_TAB"] == "song" { selection = 1 }
+            switch ProcessInfo.processInfo.environment["ABSOUND_START_TAB"] {
+            case "sounds": selection = 1
+            case "song": selection = 2
+            default: break
+            }
             #endif
         }
     }

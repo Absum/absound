@@ -17,7 +17,12 @@ final class TransportController: ObservableObject {
 
     @Published private(set) var isPlaying = false
     @Published private(set) var songPlaying = false
-    @Published var tempo: Double = 112 { didSet { engine.setTempo(tempo) } }
+    @Published var tempo: Double = 112 {
+        didSet {
+            engine.setTempo(tempo)
+            if project.tempo != tempo { project.tempo = tempo }   // keep persisted copy in sync
+        }
+    }
     @Published private(set) var currentStep = -1
     @Published private(set) var playPosition: Double = -1
     @Published private(set) var currentPattern = 0
@@ -29,11 +34,17 @@ final class TransportController: ObservableObject {
 
     private let engine = AudioEngine()
     private var displayLink: CADisplayLink?
+    private let store = ProjectStore()
+    private var saveCancellable: AnyCancellable?
+    /// Dedicated engine track for the standalone Sound Lab (Sounds tab) — no steps,
+    /// only live auditions, so sound design works without touching any layer.
+    private(set) var previewEngineId: Int = -1
 
     let stepCount = Project.stepCount
 
     init() {
-        var p = Project.demo()
+        var p = store.load() ?? Project.demo()
+        // Re-register every layer with the engine: persisted engineIds are stale handles.
         for i in p.layers.indices {
             let l = p.layers[i]
             p.layers[i].engineId = engine.addTrack(kind: l.kind.rawValue, sound: l.sound)
@@ -41,10 +52,35 @@ final class TransportController: ObservableObject {
         }
         project = p
         selection = p.layers.last(where: { $0.kind == .synth }).map { .track($0.id) } ?? .drums
-        engine.setTempo(tempo)
+        tempo = p.tempo
+        engine.setTempo(p.tempo)
         engine.setSongMode(false)
         engine.setPattern(p.currentPatternIndex)
+        engine.setSong(p.song)
         pushEverything()
+
+        previewEngineId = engine.addTrack(kind: TrackKind.synth.rawValue, sound: 0)
+
+        // Autosave: any project mutation persists after a short quiet period.
+        saveCancellable = $project
+            .dropFirst()
+            .debounce(for: .seconds(0.8), scheduler: RunLoop.main)
+            .sink { [store] in store.save($0) }
+    }
+
+    /// Immediate save (called when the app backgrounds).
+    func saveNow() { store.save(project) }
+
+    // MARK: - Standalone sound design (Sounds tab)
+
+    func applyPreviewPatch(_ patch: SynthPatch) {
+        guard previewEngineId >= 0 else { return }
+        engine.setPatch(previewEngineId, patch.toAB())
+    }
+    func auditionPreview(row: Int) {
+        guard previewEngineId >= 0 else { return }
+        engine.start()
+        engine.noteOn(track: previewEngineId, note: context.midiNote(forRow: row), velocity: 0.9)
     }
 
     func onAppear() { engine.start() }
