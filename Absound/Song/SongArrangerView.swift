@@ -10,6 +10,9 @@ import SwiftUI
 
 struct SongArrangerView: View {
     @ObservedObject var transport: TransportController
+    @EnvironmentObject var songLibrary: SongLibrary
+    @State private var showSongs = false
+    @State private var midiExport: MidiExportItem?
 
     private var song: [Int] { transport.project.song }
     private var names: [String] { transport.patternNames }
@@ -18,7 +21,22 @@ struct SongArrangerView: View {
         ZStack {
             ArcticBackground(glow: transport.songPlaying)
             VStack(alignment: .leading, spacing: 18) {
-                Text("SONG").font(Theme.display(24)).foregroundStyle(Theme.frost).tracking(4)
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("SONG").font(Theme.display(24)).foregroundStyle(Theme.frost).tracking(4)
+                        Text(transport.project.name).font(Theme.body(13)).foregroundStyle(Theme.teal)
+                    }
+                    Spacer()
+                    Button { showSongs = true } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "folder").font(.system(size: 12))
+                            Text("Songs").font(Theme.body(14))
+                        }
+                        .foregroundStyle(Theme.frost)
+                        .padding(.vertical, 8).padding(.horizontal, 13)
+                        .background(Capsule().fill(Color.white.opacity(0.07)))
+                    }
+                }
 
                 palette
                 arrangement
@@ -26,6 +44,11 @@ struct SongArrangerView: View {
                 transportRow
             }
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 10)
+        }
+        .sheet(isPresented: $showSongs) { SongsSheet(transport: transport) }
+        .sheet(item: $midiExport) { item in
+            ShareSheet(url: item.url)
+                .presentationDetents([.medium])
         }
         .onAppear { transport.onAppear() }
     }
@@ -84,6 +107,110 @@ struct SongArrangerView: View {
         }
     }
 
+    // MARK: - Songs library sheet
+
+    private struct SongsSheet: View {
+        @ObservedObject var transport: TransportController
+        @EnvironmentObject var library: SongLibrary
+        @Environment(\.dismiss) private var dismiss
+
+        @State private var renameTarget: Project?
+        @State private var newName = ""
+        @State private var renamingCurrent = false
+
+        var body: some View {
+            NavigationStack {
+                ZStack {
+                    Theme.bgGradient.ignoresSafeArea()
+                    List {
+                        Section("Current song") {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(transport.project.name).font(Theme.body(16)).foregroundStyle(Theme.frost)
+                                    Text(library.contains(transport.project.id) ? "In library" : "Not saved to library")
+                                        .font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.4))
+                                }
+                                Spacer()
+                                Button { newName = transport.project.name; renamingCurrent = true } label: {
+                                    Image(systemName: "pencil").foregroundStyle(Theme.frost.opacity(0.7))
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            Button {
+                                library.save(transport.project)
+                            } label: {
+                                Label("Save to library", systemImage: "square.and.arrow.down")
+                                    .foregroundStyle(Theme.teal)
+                            }
+                            Button {
+                                stashCurrent()
+                                transport.loadProject(Project.blank(name: library.uniqueName("New Song")))
+                                dismiss()
+                            } label: {
+                                Label("New song", systemImage: "plus").foregroundStyle(Theme.cyan)
+                            }
+                        }
+                        Section("Library") {
+                            if library.songs.isEmpty {
+                                Text("No saved songs yet").font(Theme.body(13)).foregroundStyle(Theme.frost.opacity(0.4))
+                            }
+                            ForEach(library.songs) { s in
+                                Button {
+                                    guard s.id != transport.project.id else { dismiss(); return }
+                                    stashCurrent()
+                                    transport.loadProject(s)
+                                    dismiss()
+                                } label: {
+                                    HStack {
+                                        Text(s.name).font(Theme.body(15)).foregroundStyle(Theme.frost)
+                                        Spacer()
+                                        if s.id == transport.project.id {
+                                            Text("current").font(Theme.light(11)).foregroundStyle(Theme.teal)
+                                        }
+                                        Text("\(s.song.count) section\(s.song.count == 1 ? "" : "s")")
+                                            .font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.4))
+                                    }
+                                }
+                                .contextMenu {
+                                    Button { newName = s.name; renameTarget = s } label: { Label("Rename", systemImage: "pencil") }
+                                    Button(role: .destructive) { library.delete(s.id) } label: { Label("Delete", systemImage: "trash") }
+                                }
+                            }
+                        }
+                    }
+                    .scrollContentBackground(.hidden)
+                }
+                .navigationTitle("Songs")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+                .alert("Rename song", isPresented: Binding(
+                    get: { renameTarget != nil || renamingCurrent },
+                    set: { if !$0 { renameTarget = nil; renamingCurrent = false } }
+                )) {
+                    TextField("Name", text: $newName)
+                    Button("Rename") {
+                        if renamingCurrent {
+                            transport.renameProject(newName)
+                            if library.contains(transport.project.id) { library.rename(transport.project.id, to: newName) }
+                        } else if let t = renameTarget {
+                            library.rename(t.id, to: newName)
+                        }
+                        renameTarget = nil; renamingCurrent = false
+                    }
+                    Button("Cancel", role: .cancel) { renameTarget = nil; renamingCurrent = false }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .preferredColorScheme(.dark)
+        }
+
+        /// Nothing is ever lost: the current song is snapshotted into the library
+        /// before switching away from it.
+        private func stashCurrent() {
+            library.save(transport.project)
+        }
+    }
+
     private var transportRow: some View {
         HStack(spacing: 18) {
             Button { transport.toggleSong() } label: {
@@ -101,6 +228,17 @@ struct SongArrangerView: View {
                 Text("\(Int(transport.tempo)) BPM").font(Theme.light(12)).foregroundStyle(Theme.frost.opacity(0.5))
             }
             Spacer()
+            Button {
+                if let url = MidiExport.export(transport.project) { midiExport = MidiExportItem(url: url) }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "square.and.arrow.up").font(.system(size: 12))
+                    Text("MIDI").font(Theme.body(14))
+                }
+                .foregroundStyle(Theme.cyan)
+                .padding(.vertical, 9).padding(.horizontal, 14)
+                .background(Capsule().fill(Color.white.opacity(0.07)))
+            }
             if !song.isEmpty {
                 Button { transport.clearSong() } label: {
                     Text("Clear").font(Theme.body(14)).foregroundStyle(Theme.frost.opacity(0.7))
@@ -110,4 +248,19 @@ struct SongArrangerView: View {
             }
         }
     }
+}
+
+// MARK: - MIDI share plumbing
+
+struct MidiExportItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }

@@ -84,6 +84,7 @@ final class AudioEngine {
         ab_core_set_patch(core, Int32(engineId), &p)
     }
     func setTrackMute(_ engineId: Int, muted: Bool) { ab_core_set_track_mute(core, Int32(engineId), muted ? 1 : 0) }
+    func setTrackSolo(_ engineId: Int, soloed: Bool) { ab_core_set_track_solo(core, Int32(engineId), soloed ? 1 : 0) }
     func clearTrack(_ engineId: Int, pattern: Int) { ab_core_clear_track(core, Int32(engineId), Int32(pattern)) }
 
     func setStep(track: Int, pattern: Int, step: Int, note: Int, velocity: Int) {

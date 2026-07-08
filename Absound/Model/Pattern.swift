@@ -29,8 +29,10 @@ struct Layer: Identifiable, Codable {
     var sound: Int               // DrumSound raw value (drum layers only)
     var patch: SynthPatch?       // synth layers only
     var muted: Bool = false
+    var soloed: Bool = false     // transient mixing state — not persisted
 
-    // engineId is a live handle; persisting it would route edits to wrong slots after a reload.
+    // engineId is a live handle; persisting it would route edits to wrong slots
+    // after a reload. Solo is deliberately session-only (mute persists).
     enum CodingKeys: String, CodingKey { case id, kind, sound, patch, muted }
 
     static func synth(_ patch: SynthPatch) -> Layer { Layer(kind: .synth, sound: 0, patch: patch) }
@@ -62,11 +64,13 @@ struct PatternData: Identifiable, Codable {
     func drumLane(_ layer: UUID) -> [Bool] { drums[layer] ?? Array(repeating: false, count: Project.stepCount) }
 }
 
-struct Project: Codable {
+struct Project: Codable, Identifiable {
     static let stepCount = Int(AB_NUM_STEPS)
     static let maxPatterns = Int(AB_MAX_PATTERNS)
     static let patternNames = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
+    var id = UUID()
+    var name: String = "My Song"
     var contextRoot: Int
     var scaleRaw: String
     var baseOctave: Int
@@ -80,6 +84,35 @@ struct Project: Codable {
         MusicalContext(root: contextRoot,
                        scale: Scale(rawValue: scaleRaw) ?? .naturalMinor,
                        baseOctave: baseOctave)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, contextRoot, scaleRaw, baseOctave, tempo, layers, patterns, song, currentPatternIndex
+    }
+
+    init(id: UUID = UUID(), name: String = "My Song", contextRoot: Int, scaleRaw: String,
+         baseOctave: Int, tempo: Double = 112, layers: [Layer], patterns: [PatternData],
+         song: [Int], currentPatternIndex: Int) {
+        self.id = id; self.name = name
+        self.contextRoot = contextRoot; self.scaleRaw = scaleRaw; self.baseOctave = baseOctave
+        self.tempo = tempo; self.layers = layers; self.patterns = patterns
+        self.song = song; self.currentPatternIndex = currentPatternIndex
+    }
+
+    /// Tolerant decode: id/name/tempo were added after the first shipped save
+    /// format, so older project.json files must still load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? "My Song"
+        contextRoot = try c.decode(Int.self, forKey: .contextRoot)
+        scaleRaw = try c.decode(String.self, forKey: .scaleRaw)
+        baseOctave = try c.decode(Int.self, forKey: .baseOctave)
+        tempo = try c.decodeIfPresent(Double.self, forKey: .tempo) ?? 112
+        layers = try c.decode([Layer].self, forKey: .layers)
+        patterns = try c.decode([PatternData].self, forKey: .patterns)
+        song = try c.decode([Int].self, forKey: .song)
+        currentPatternIndex = try c.decode(Int.self, forKey: .currentPatternIndex)
     }
 
     static func demo() -> Project {
@@ -97,6 +130,16 @@ struct Project: Codable {
 
         return Project(contextRoot: 0, scaleRaw: Scale.naturalMinor.rawValue, baseOctave: 3,
                        layers: layers, patterns: [a], song: [0], currentPatternIndex: 0)
+    }
+
+    /// A fresh song: the starter layer set, empty pattern, empty arrangement.
+    static func blank(name: String = "New Song") -> Project {
+        let layers = [Layer.drum(.kick), Layer.drum(.snare), Layer.drum(.hat),
+                      Layer.synth(PatchFactory.named("Deep Sub")),
+                      Layer.synth(PatchFactory.named("Super Saw"))]
+        return Project(name: name, contextRoot: 0, scaleRaw: Scale.naturalMinor.rawValue,
+                       baseOctave: 3, layers: layers, patterns: [PatternData(name: "A")],
+                       song: [], currentPatternIndex: 0)
     }
 
     private static func boolLane(_ on: [Int]) -> [Bool] {

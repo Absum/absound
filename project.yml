@@ -67,6 +67,7 @@ targets:
       - path: Absound/Model/Pattern.swift
       - path: Absound/Model/ProjectStore.swift
       - path: Absound/Sound/PatchLibrary.swift
+      - path: Absound/MIDI/MidiExport.swift
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

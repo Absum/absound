@@ -88,6 +88,22 @@ final class DSPCoreTests: XCTestCase {
         XCTAssertGreaterThan(m.rms, 0.001)
     }
 
+    func testSoloGatesNonSoloedTracks() {
+        let core = ab_core_create(sr); defer { ab_core_destroy(core) }
+        let beat = addTrack(core, kind: AB_KIND_DRUM, sound: AB_DRUM_KICK)
+        let silent = addTrack(core, kind: AB_KIND_DRUM, sound: AB_DRUM_HAT)
+        for s in 0..<16 { setStep(core, beat, s, 0, 120) }   // only `beat` has content
+        ab_core_set_playing(core, 1)
+
+        ab_core_set_track_solo(core, Int32(silent), 1)       // solo the EMPTY track
+        let gated = renderMetrics(core, seconds: 0.5)
+        XCTAssertEqual(gated.peak, 0, accuracy: 1e-6, "non-soloed tracks must be gated out")
+
+        ab_core_set_track_solo(core, Int32(silent), 0)       // unsolo -> beat returns
+        let open = renderMetrics(core, seconds: 0.5)
+        XCTAssertGreaterThan(open.peak, 0.05, "clearing solo restores the mix")
+    }
+
     func testMuteSilencesATrack() {
         let core = ab_core_create(sr); defer { ab_core_destroy(core) }
         let k = addTrack(core, kind: AB_KIND_DRUM, sound: AB_DRUM_KICK)

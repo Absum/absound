@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var selection = 0
     @StateObject private var transport = TransportController()
     @StateObject private var patchLibrary = PatchLibrary()
+    @StateObject private var songLibrary = SongLibrary()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -30,6 +31,7 @@ struct ContentView: View {
         .tint(Theme.teal)
         .preferredColorScheme(.dark)
         .environmentObject(patchLibrary)
+        .environmentObject(songLibrary)
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive { transport.saveNow() }
         }

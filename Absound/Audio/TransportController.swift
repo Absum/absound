@@ -49,6 +49,7 @@ final class TransportController: ObservableObject {
             let l = p.layers[i]
             p.layers[i].engineId = engine.addTrack(kind: l.kind.rawValue, sound: l.sound)
             if let patch = l.patch { engine.setPatch(p.layers[i].engineId, patch.toAB()) }
+            if l.muted { engine.setTrackMute(p.layers[i].engineId, muted: true) }
         }
         project = p
         selection = p.layers.last(where: { $0.kind == .synth }).map { .track($0.id) } ?? .drums
@@ -70,6 +71,36 @@ final class TransportController: ObservableObject {
 
     /// Immediate save (called when the app backgrounds).
     func saveNow() { store.save(project) }
+
+    /// Swap the whole working project (Songs library load / New Song). Tears down
+    /// the current engine tracks and registers the new project's layers.
+    func loadProject(_ p: Project) {
+        stop()
+        for l in project.layers { engine.removeTrack(l.engineId) }
+        var newP = p
+        for i in newP.layers.indices {
+            let l = newP.layers[i]
+            newP.layers[i].engineId = engine.addTrack(kind: l.kind.rawValue, sound: l.sound)
+            if let patch = l.patch { engine.setPatch(newP.layers[i].engineId, patch.toAB()) }
+            if l.muted { engine.setTrackMute(newP.layers[i].engineId, muted: true) }
+            newP.layers[i].soloed = false   // solo is session-state; never carried across loads
+        }
+        newP.currentPatternIndex = min(newP.currentPatternIndex, max(newP.patterns.count - 1, 0))
+        project = newP
+        selection = newP.layers.last(where: { $0.kind == .synth }).map { .track($0.id) } ?? .drums
+        tempo = newP.tempo
+        engine.setSongMode(false)
+        engine.setPattern(newP.currentPatternIndex)
+        engine.setSong(newP.song)
+        pushEverything()
+        saveNow()
+    }
+
+    func renameProject(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        project.name = trimmed
+    }
 
     // MARK: - Standalone sound design (Sounds tab)
 
@@ -167,6 +198,14 @@ final class TransportController: ObservableObject {
         project.layers[i].muted.toggle()
         engine.setTrackMute(project.layers[i].engineId, muted: project.layers[i].muted)
     }
+
+    func toggleSolo(_ id: UUID) {
+        guard let i = layerIndex(id) else { return }
+        project.layers[i].soloed.toggle()
+        engine.setTrackSolo(project.layers[i].engineId, soloed: project.layers[i].soloed)
+    }
+
+    var anySolo: Bool { project.layers.contains { $0.soloed } }
     func setTrackSound(_ id: UUID, sound: Int) {
         guard let i = layerIndex(id) else { return }
         project.layers[i].sound = sound

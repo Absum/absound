@@ -14,6 +14,7 @@ struct PatternStudioView: View {
     @State private var showSettings = false
     @State private var showBrowser = false
     @State private var showSoundLab = false
+    @State private var midiExport: MidiExportItem?
     @Environment(\.verticalSizeClass) private var vSize
 
     enum MelodyMode: String, CaseIterable { case roll = "Roll", play = "Play" }
@@ -40,6 +41,7 @@ struct PatternStudioView: View {
             }
         }
         .fullScreenCover(isPresented: $showSoundLab) { SoundLabView(transport: transport) }
+        .sheet(item: $midiExport) { item in ShareSheet(url: item.url).presentationDetents([.medium]) }
         .onAppear {
             transport.onAppear()
             #if DEBUG
@@ -84,6 +86,9 @@ struct PatternStudioView: View {
             Menu {
                 Button { transport.addPattern() } label: { Label("Add pattern", systemImage: "plus") }
                 Button { transport.duplicatePattern() } label: { Label("Duplicate pattern", systemImage: "doc.on.doc") }
+                Button {
+                    if let url = MidiExport.export(transport.project) { midiExport = MidiExportItem(url: url) }
+                } label: { Label("Export MIDI", systemImage: "square.and.arrow.up") }
                 Divider()
                 Button(role: .destructive) { transport.clearCurrent() } label: { Label("Clear this layer", systemImage: "trash") }
             } label: {
@@ -122,6 +127,9 @@ struct PatternStudioView: View {
             }
             Button { transport.toggleMute(layer.id) } label: {
                 Label(layer.muted ? "Unmute" : "Mute", systemImage: layer.muted ? "speaker.slash" : "speaker.wave.2")
+            }
+            Button { transport.toggleSolo(layer.id) } label: {
+                Label(layer.soloed ? "Unsolo" : "Solo", systemImage: "headphones")
             }
             Divider()
             Button(role: .destructive) { transport.removeTrack(layer.id) } label: { Label("Remove layer", systemImage: "minus.circle") }
@@ -242,9 +250,18 @@ private struct LayerStrip: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(transport.melodicLayers) { l in
-                    chip(l.displayName, selected: transport.selectedLayerId == l.id, muted: l.muted, accent: Theme.cyan) { transport.select(l.id) }
+                    chip(l.displayName, selected: transport.selectedLayerId == l.id,
+                         muted: l.muted, soloed: l.soloed, accent: Theme.cyan) { transport.select(l.id) }
+                        .contextMenu {
+                            Button { transport.toggleMute(l.id) } label: {
+                                Label(l.muted ? "Unmute" : "Mute", systemImage: l.muted ? "speaker.slash" : "speaker.wave.2")
+                            }
+                            Button { transport.toggleSolo(l.id) } label: {
+                                Label(l.soloed ? "Unsolo" : "Solo", systemImage: "headphones")
+                            }
+                        }
                 }
-                chip("Drums", selected: transport.selection == .drums, muted: false, accent: Theme.teal) { transport.selectDrums() }
+                chip("Drums", selected: transport.selection == .drums, muted: false, soloed: false, accent: Theme.teal) { transport.selectDrums() }
                 Menu {
                     Menu("Add instrument") {
                         ForEach(PatchCategory.allCases) { cat in
@@ -263,15 +280,17 @@ private struct LayerStrip: View {
             }
         }
     }
-    private func chip(_ title: String, selected: Bool, muted: Bool, accent: Color, _ tap: @escaping () -> Void) -> some View {
+    private func chip(_ title: String, selected: Bool, muted: Bool, soloed: Bool, accent: Color, _ tap: @escaping () -> Void) -> some View {
         Button(action: tap) {
             HStack(spacing: 5) {
                 if muted { Image(systemName: "speaker.slash.fill").font(.system(size: 9)) }
+                if soloed { Image(systemName: "headphones").font(.system(size: 9)) }
                 Text(title).font(Theme.body(14))
             }
             .foregroundStyle(selected ? Theme.bgTop : Theme.frost.opacity(muted ? 0.4 : 0.85))
             .padding(.vertical, 8).padding(.horizontal, 14)
             .background(Capsule().fill(selected ? accent.opacity(0.9) : Color.white.opacity(0.07)))
+            .overlay(Capsule().stroke(soloed ? Theme.teal : .clear, lineWidth: 1.5))
         }
     }
 }
@@ -288,6 +307,7 @@ private struct DrumLaneControls: View {
                         ForEach(DrumSound.allCases) { d in Button(d.name) { transport.setTrackSound(t.id, sound: d.rawValue) } }
                         Divider()
                         Button { transport.toggleMute(t.id) } label: { Label(t.muted ? "Unmute" : "Mute", systemImage: t.muted ? "speaker.slash" : "speaker.wave.2") }
+                        Button { transport.toggleSolo(t.id) } label: { Label(t.soloed ? "Unsolo" : "Solo", systemImage: "headphones") }
                         Button(role: .destructive) { transport.removeTrack(t.id) } label: { Label("Remove", systemImage: "trash") }
                     } label: {
                         HStack(spacing: 3) {

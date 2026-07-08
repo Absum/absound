@@ -127,6 +127,8 @@ void ab_core_remove_track(ABAudioCore *core, int track);
 void ab_core_clear_track(ABAudioCore *core, int track, int pattern);
 void ab_core_set_track_sound(ABAudioCore *core, int track, int sound); /* synth preset or drum type */
 void ab_core_set_track_mute(ABAudioCore *core, int track, int muted);
+/* Solo: when any track is soloed, only soloed tracks sound (mute still applies). */
+void ab_core_set_track_solo(ABAudioCore *core, int track, int soloed);
 
 /* Apply a full synth patch to a track (synth tracks only; ignored for drums).
  * Staged and swapped in on the audio thread at the next control block. */

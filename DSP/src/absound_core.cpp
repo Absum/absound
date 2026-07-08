@@ -526,6 +526,7 @@ void defaultPatch(int preset, ABPatch &p) {
 struct Track {
     std::atomic<bool> active{false};
     std::atomic<bool> muted{false};
+    std::atomic<bool> soloed{false};
     std::atomic<bool> resetRequest{false};
     int kind = AB_KIND_SYNTH;
     int drumSound = AB_DRUM_KICK;
@@ -589,6 +590,7 @@ struct ABAudioCore {
     double sr = 44100.0;
     Track tracks[AB_MAX_TRACKS];
     Delay delay; Reverb reverb;
+    std::atomic<int> soloCount{0};
 
     std::atomic<double> bpm{112.0};
     std::atomic<int> playing{0};
@@ -707,6 +709,8 @@ int ab_core_add_track(ABAudioCore *core, int kind, int sound) {
         if (t.active.load(std::memory_order_relaxed)) continue;
         t.clearAllPatterns();
         t.muted.store(false, std::memory_order_relaxed);
+        if (t.soloed.exchange(false, std::memory_order_relaxed))
+            core->soloCount.fetch_add(-1, std::memory_order_relaxed);
         t.kind = kind == AB_KIND_DRUM ? AB_KIND_DRUM : AB_KIND_SYNTH;
         // Track is inactive (render skips it), so touching voices/config here is
         // race-free. Reset synchronously — an async resetRequest would be consumed
@@ -734,6 +738,8 @@ int ab_core_add_track(ABAudioCore *core, int kind, int sound) {
 
 void ab_core_remove_track(ABAudioCore *core, int track) {
     if (!core || track < 0 || track >= AB_MAX_TRACKS) return;
+    if (core->tracks[track].soloed.exchange(false, std::memory_order_relaxed))
+        core->soloCount.fetch_add(-1, std::memory_order_relaxed);
     core->tracks[track].resetRequest.store(true, std::memory_order_release);
     core->tracks[track].active.store(false, std::memory_order_release);
 }
@@ -766,6 +772,13 @@ void ab_core_set_patch(ABAudioCore *core, int track, const ABPatch *patch) {
 void ab_core_set_track_mute(ABAudioCore *core, int track, int muted) {
     if (!core || track < 0 || track >= AB_MAX_TRACKS) return;
     core->tracks[track].muted.store(muted ? true : false, std::memory_order_relaxed);
+}
+
+void ab_core_set_track_solo(ABAudioCore *core, int track, int soloed) {
+    if (!core || track < 0 || track >= AB_MAX_TRACKS) return;
+    bool newVal = soloed != 0;
+    bool oldVal = core->tracks[track].soloed.exchange(newVal, std::memory_order_relaxed);
+    if (newVal != oldVal) core->soloCount.fetch_add(newVal ? 1 : -1, std::memory_order_relaxed);
 }
 
 void ab_core_set_step(ABAudioCore *core, int track, int pattern, int step, int midiNote, int velocity) {
@@ -829,9 +842,11 @@ void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
         }
 
         float dryL = 0, dryR = 0, dSendL = 0, dSendR = 0, rSendL = 0, rSendR = 0;
+        const bool anySolo = core->soloCount.load(std::memory_order_relaxed) > 0;
 
         for (auto &t : core->tracks) {
             if (!t.active.load(std::memory_order_acquire) || t.muted.load(std::memory_order_relaxed)) continue;
+            if (anySolo && !t.soloed.load(std::memory_order_relaxed)) continue;
             float tl = 0, tr = 0;
             if (t.kind == AB_KIND_SYNTH) {
                 for (auto &v : t.synth) v.render(t.cfg, bpm, tl, tr);
