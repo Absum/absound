@@ -1,196 +1,192 @@
 //
 //  PatternStudioView.swift
-//  M-Layers Studio: a multi-track composer. A layer bar selects which track to
-//  edit — melodic layers open the scale-locked Roll/Highway; the Drums chip opens
-//  the multi-lane drum grid. Key/scale/tempo are global; each layer has its own
-//  sound. Everything auditions live through the N-track engine.
+//  Decluttered multi-track Studio. Portrait stacks compact control rows above a
+//  big scrollable piano-roll / drum-lanes canvas; rotating to landscape gives the
+//  editor a wide layout. Key/scale/tempo live in a settings sheet; per-layer
+//  actions live in menus — keeping the surface thumb-friendly.
 //
 
 import SwiftUI
 
 struct PatternStudioView: View {
-    @StateObject private var transport = TransportController()
+    @ObservedObject var transport: TransportController
     @State private var melodyMode: MelodyMode = .roll
+    @State private var showSettings = false
+    @Environment(\.verticalSizeClass) private var vSize
 
     enum MelodyMode: String, CaseIterable { case roll = "Roll", play = "Play" }
+
+    private var melodicSelected: Bool {
+        if case .track = transport.selection, transport.selectedLayer?.kind == .synth { return true }
+        return false
+    }
 
     var body: some View {
         ZStack {
             ArcticBackground(glow: transport.isPlaying)
-            VStack(spacing: 10) {
-                header
-                keyScaleBar
-                LayerBar(transport: transport)
-                editorArea
-                    .frame(maxHeight: .infinity)
-                TransportBar(transport: transport)
+            if vSize == .compact {
+                landscapeBody
+            } else {
+                portraitBody
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-            .padding(.bottom, 10)
         }
+        .sheet(isPresented: $showSettings) { SettingsSheet(transport: transport) }
         .onAppear {
             transport.onAppear()
             #if DEBUG
             let env = ProcessInfo.processInfo.environment
             if env["ABSOUND_TAB"] == "drums" { transport.selectDrums() }
             if env["ABSOUND_MELODY"] == "play" { melodyMode = .play }
-            if env["ABSOUND_AUTOPLAY"] != nil { transport.play() }
+            if env["ABSOUND_AUTOPLAY"] != nil { transport.playPattern() }
             #endif
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("ABSOUND").font(Theme.display(22)).foregroundStyle(Theme.frost).tracking(4)
-            Spacer()
-            Button { transport.clearCurrent() } label: {
-                Image(systemName: "trash").font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Theme.frost.opacity(0.7))
+    // MARK: - Portrait
+
+    private var portraitBody: some View {
+        VStack(spacing: 10) {
+            topBar
+            LayerStrip(transport: transport)
+            contextualControls
+            editorArea.frame(maxHeight: .infinity)
+            transportBar
+        }
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 10)
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 8) {
+            Button { showSettings = true } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "key").font(.system(size: 11))
+                    Text("\(transport.context.displayName) · \(Int(transport.tempo))").font(Theme.body(14)).lineLimit(1)
+                    Image(systemName: "chevron.down").font(.system(size: 9))
+                }
+                .foregroundStyle(Theme.frost)
+                .padding(.vertical, 8).padding(.horizontal, 12)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.07)))
+            }
+            .fixedSize()
+            Spacer(minLength: 6)
+            PatternChips(transport: transport)
+            Menu {
+                Button { transport.addPattern() } label: { Label("Add pattern", systemImage: "plus") }
+                Button { transport.duplicatePattern() } label: { Label("Duplicate pattern", systemImage: "doc.on.doc") }
+                Divider()
+                Button(role: .destructive) { transport.clearCurrent() } label: { Label("Clear this layer", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.frost)
+                    .frame(width: 34, height: 34).background(Circle().fill(Color.white.opacity(0.07)))
             }
         }
     }
 
-    private var keyScaleBar: some View {
-        HStack(spacing: 8) {
-            menu(label: transport.context.rootName, icon: "key") {
-                ForEach(0..<12, id: \.self) { r in Button(MusicalContext.rootNames[r]) { transport.setRoot(r) } }
+    @ViewBuilder private var contextualControls: some View {
+        if melodicSelected, let layer = transport.selectedLayer {
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(SynthPreset.allCases) { p in Button(p.name) { transport.setTrackSound(layer.id, sound: p.rawValue) } }
+                } label: { pill(transport.selectedPreset.name, icon: "waveform") }
+                Picker("", selection: $melodyMode) {
+                    ForEach(MelodyMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented).frame(width: 130)
+                Spacer()
+                layerMenu(layer)
             }
-            menu(label: transport.context.scale.displayName, icon: "music.note.list") {
-                ForEach(Scale.allCases) { s in Button(s.displayName) { transport.setScale(s) } }
+        } else if case .drums = transport.selection {
+            DrumLaneControls(transport: transport)
+        }
+    }
+
+    private func layerMenu(_ layer: Layer) -> some View {
+        Menu {
+            Button { transport.generateMelody() } label: { Label("Generate melody", systemImage: "sparkles") }
+            Button { transport.showShadow.toggle() } label: {
+                Label(transport.showShadow ? "Hide other layers" : "Show other layers", systemImage: "square.stack.3d.up")
             }
+            Button { transport.toggleMute(layer.id) } label: {
+                Label(layer.muted ? "Unmute" : "Mute", systemImage: layer.muted ? "speaker.slash" : "speaker.wave.2")
+            }
+            Divider()
+            Button(role: .destructive) { transport.removeTrack(layer.id) } label: { Label("Remove layer", systemImage: "minus.circle") }
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.system(size: 20)).foregroundStyle(Theme.frost.opacity(0.85))
+                .frame(width: 38, height: 34)
         }
     }
 
     @ViewBuilder private var editorArea: some View {
         switch transport.selection {
         case .drums:
-            DrumsEditor(transport: transport)
+            DrumLanesView(transport: transport)
         case .track:
-            if transport.selectedTrack != nil {
-                MelodicEditor(transport: transport, mode: $melodyMode)
-            } else {
+            if transport.selectedLayer != nil {
+                switch melodyMode {
+                case .roll: PianoRollView(transport: transport)
+                case .play: AuroraHighwayView(transport: transport)
+                }
+            } else { Spacer() }
+        }
+    }
+
+    private var transportBar: some View {
+        HStack(spacing: 18) {
+            playButton(size: 56)
+            Spacer()
+            HStack(spacing: 12) {
+                tempoButton("minus", -1)
+                Text("\(Int(transport.tempo))").font(Theme.display(26)).foregroundStyle(Theme.frost).monospacedDigit().frame(width: 54)
+                tempoButton("plus", 1)
+            }
+        }
+        .padding(.vertical, 11).padding(.horizontal, 18)
+        .background(RoundedRectangle(cornerRadius: 20).fill(Color.white.opacity(0.06))
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.frost.opacity(0.12), lineWidth: 1)))
+    }
+
+    // MARK: - Landscape (wide editor)
+
+    private var landscapeBody: some View {
+        HStack(spacing: 10) {
+            VStack(spacing: 10) {
+                playButton(size: 52)
+                if melodicSelected {
+                    Picker("", selection: $melodyMode) {
+                        ForEach(MelodyMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented)
+                }
+                Menu {
+                    ForEach(transport.melodicLayers) { l in Button(l.displayName) { transport.select(l.id) } }
+                    Button("Drums") { transport.selectDrums() }
+                } label: { pill(transport.selectedLayer?.displayName ?? "Drums", icon: "rectangle.stack") }
+                Button { showSettings = true } label: { pill("\(transport.context.rootName) · \(Int(transport.tempo))", icon: "key") }
                 Spacer()
             }
+            .frame(width: 132)
+            editorArea
         }
+        .padding(.horizontal, 12).padding(.vertical, 8)
     }
 
-    private func menu<Content: View>(label: String, icon: String, @ViewBuilder _ content: () -> Content) -> some View {
-        Menu { content() } label: {
-            HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 11))
-                Text(label).font(Theme.body(15)).lineLimit(1)
-            }
-            .foregroundStyle(Theme.frost)
-            .padding(.vertical, 8).frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.07)))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.frost.opacity(0.12), lineWidth: 1))
+    // MARK: - Shared bits
+
+    private func playButton(size: CGFloat) -> some View {
+        Button(action: transport.togglePlay) {
+            Image(systemName: transport.isPlaying ? "stop.fill" : "play.fill")
+                .font(.system(size: size * 0.4, weight: .bold)).foregroundStyle(Theme.bgTop)
+                .frame(width: size, height: size).background(Circle().fill(Theme.teal))
+                .shadow(color: Theme.teal.opacity(transport.isPlaying ? 0.7 : 0.3), radius: 12)
         }
     }
-}
-
-// MARK: - Layer bar
-
-private struct LayerBar: View {
-    @ObservedObject var transport: TransportController
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(transport.melodicTracks) { t in
-                    chip(title: t.displayName,
-                         selected: transport.selectedTrackId == t.id,
-                         muted: t.muted,
-                         accent: Theme.cyan) { transport.select(t.id) }
-                }
-                chip(title: "Drums",
-                     selected: transport.selection == .drums,
-                     muted: false,
-                     accent: Theme.teal) { transport.selectDrums() }
-                addMenu
-            }
-            .padding(.vertical, 2)
+    private func tempoButton(_ symbol: String, _ delta: Double) -> some View {
+        Button { transport.setTempo(transport.tempo + delta) } label: {
+            Image(systemName: symbol).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.frost)
+                .frame(width: 36, height: 36).background(Circle().fill(Color.white.opacity(0.08)))
         }
     }
-
-    private func chip(title: String, selected: Bool, muted: Bool, accent: Color, _ tap: @escaping () -> Void) -> some View {
-        Button(action: tap) {
-            HStack(spacing: 5) {
-                if muted { Image(systemName: "speaker.slash.fill").font(.system(size: 9)) }
-                Text(title).font(Theme.body(14))
-            }
-            .foregroundStyle(selected ? Theme.bgTop : Theme.frost.opacity(muted ? 0.4 : 0.85))
-            .padding(.vertical, 7).padding(.horizontal, 13)
-            .background(Capsule().fill(selected ? accent.opacity(0.9) : Color.white.opacity(0.07)))
-            .overlay(Capsule().stroke(Theme.frost.opacity(0.12), lineWidth: 1))
-        }
-    }
-
-    private var addMenu: some View {
-        Menu {
-            Menu("Add instrument") {
-                ForEach(SynthPreset.allCases) { p in Button(p.name) { transport.addSynthLayer(p) } }
-            }
-            Menu("Add drum") {
-                ForEach(DrumSound.allCases) { d in Button(d.name) { transport.addDrumLayer(d) } }
-            }
-        } label: {
-            Image(systemName: "plus").font(.system(size: 14, weight: .bold))
-                .foregroundStyle(Theme.frost)
-                .frame(width: 36, height: 34)
-                .background(Capsule().fill(Color.white.opacity(0.07)))
-                .overlay(Capsule().stroke(Theme.frost.opacity(0.12), lineWidth: 1))
-        }
-    }
-}
-
-// MARK: - Melodic editor (selected synth layer)
-
-private struct MelodicEditor: View {
-    @ObservedObject var transport: TransportController
-    @Binding var mode: PatternStudioView.MelodyMode
-
-    var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                if let t = transport.selectedTrack {
-                    Menu {
-                        ForEach(SynthPreset.allCases) { p in Button(p.name) { transport.setTrackSound(t.id, sound: p.rawValue) } }
-                    } label: {
-                        chipLabel(transport.selectedPreset.name, icon: "waveform")
-                    }
-                    Button { transport.toggleMute(t.id) } label: {
-                        Image(systemName: t.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .foregroundStyle(t.muted ? .red.opacity(0.8) : Theme.frost.opacity(0.8))
-                            .frame(width: 38, height: 34)
-                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.07)))
-                    }
-                    Button { transport.removeTrack(t.id) } label: {
-                        Image(systemName: "minus.circle").foregroundStyle(Theme.frost.opacity(0.6))
-                            .frame(width: 38, height: 34)
-                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.07)))
-                    }
-                    Button { transport.showShadow.toggle() } label: {
-                        Image(systemName: transport.showShadow ? "square.stack.3d.up.fill" : "square.stack.3d.up.slash")
-                            .foregroundStyle(transport.showShadow ? Theme.cyan : Theme.frost.opacity(0.5))
-                            .frame(width: 38, height: 34)
-                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.07)))
-                    }
-                }
-                Spacer()
-                Picker("", selection: $mode) {
-                    ForEach(PatternStudioView.MelodyMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented).frame(width: 150)
-            }
-            switch mode {
-            case .roll: ScrollView { MelodyRoll(transport: transport) }
-            case .play: AuroraHighwayView(transport: transport)
-            }
-        }
-    }
-
-    private func chipLabel(_ text: String, icon: String) -> some View {
+    private func pill(_ text: String, icon: String) -> some View {
         HStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 11))
             Text(text).font(Theme.body(14)).lineLimit(1)
@@ -198,150 +194,123 @@ private struct MelodicEditor: View {
         .fixedSize(horizontal: true, vertical: false)
         .foregroundStyle(Theme.frost)
         .padding(.vertical, 8).padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.07)))
     }
 }
 
-private struct MelodyRoll: View {
-    @ObservedObject var transport: TransportController
+// MARK: - Pattern chips
 
+private struct PatternChips: View {
+    @ObservedObject var transport: TransportController
     var body: some View {
-        let ctx = transport.context
-        let melody = transport.selectedMelody
-        let others = transport.showShadow ? transport.otherMelodies : []
-        let rows = Array((0..<transport.melodyRowCount).reversed())
-        VStack(spacing: 3) {
-            ForEach(rows, id: \.self) { row in
-                let isRoot = (ctx.midiNote(forRow: row) - ctx.root) % 12 == 0
-                HStack(spacing: 3) {
-                    Text(ctx.noteName(forRow: row)).font(Theme.light(11))
-                        .foregroundStyle(isRoot ? Theme.teal : Theme.frost.opacity(0.45))
-                        .frame(width: 40, alignment: .leading)
-                    ForEach(0..<transport.stepCount, id: \.self) { step in
-                        Cell(on: melody[step] == row, color: Theme.cyan,
-                             playhead: step == transport.currentStep, beat: step % 4 == 0, rootRow: isRoot,
-                             ghost: others.contains { $0[step] == row })
-                            .onTapGesture { transport.toggleMelody(row: row, step: step) }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Array(transport.patternNames.enumerated()), id: \.offset) { idx, name in
+                    Button { transport.selectPattern(idx) } label: {
+                        Text(name).font(Theme.title(15))
+                            .foregroundStyle(transport.editIndex == idx ? Theme.bgTop : Theme.frost.opacity(0.8))
+                            .frame(width: 32, height: 32)
+                            .background(RoundedRectangle(cornerRadius: 8)
+                                .fill(transport.editIndex == idx ? Theme.teal.opacity(0.9) : Color.white.opacity(0.07)))
                     }
                 }
             }
         }
-        .padding(.vertical, 4)
     }
 }
 
-// MARK: - Drums editor (all drum layers)
+// MARK: - Layer selection strip
 
-private struct DrumsEditor: View {
+private struct LayerStrip: View {
     @ObservedObject var transport: TransportController
-
     var body: some View {
-        VStack(spacing: 8) {
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(transport.drumTracks) { t in
-                        HStack(spacing: 4) {
-                            Menu {
-                                ForEach(DrumSound.allCases) { d in Button(d.name) { transport.setTrackSound(t.id, sound: d.rawValue) } }
-                                Divider()
-                                Button(role: .destructive) { transport.removeTrack(t.id) } label: { Label("Remove", systemImage: "trash") }
-                            } label: {
-                                HStack(spacing: 3) {
-                                    Text(t.displayName).font(Theme.body(12)).lineLimit(1)
-                                    Image(systemName: "chevron.down").font(.system(size: 8))
-                                }
-                                .foregroundStyle(t.muted ? Theme.frost.opacity(0.4) : Theme.frost.opacity(0.8))
-                                .frame(width: 64, alignment: .leading)
-                            }
-                            Button { transport.toggleMute(t.id) } label: {
-                                Image(systemName: t.muted ? "speaker.slash.fill" : "speaker.wave.1.fill")
-                                    .font(.system(size: 11)).foregroundStyle(t.muted ? .red.opacity(0.8) : Theme.frost.opacity(0.6))
-                                    .frame(width: 22)
-                            }
-                            ForEach(0..<transport.stepCount, id: \.self) { step in
-                                Cell(on: t.drumSteps[step], color: Theme.teal,
-                                     playhead: step == transport.currentStep, beat: step % 4 == 0, rootRow: false)
-                                    .frame(height: 30)
-                                    .onTapGesture { transport.toggleDrum(t.id, step: step) }
-                            }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(transport.melodicLayers) { l in
+                    chip(l.displayName, selected: transport.selectedLayerId == l.id, muted: l.muted, accent: Theme.cyan) { transport.select(l.id) }
+                }
+                chip("Drums", selected: transport.selection == .drums, muted: false, accent: Theme.teal) { transport.selectDrums() }
+                Menu {
+                    Menu("Add instrument") { ForEach(SynthPreset.allCases) { p in Button(p.name) { transport.addSynthLayer(p) } } }
+                    Menu("Add drum") { ForEach(DrumSound.allCases) { d in Button(d.name) { transport.addDrumLayer(d) } } }
+                } label: {
+                    Image(systemName: "plus").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.frost)
+                        .frame(width: 38, height: 34).background(Capsule().fill(Color.white.opacity(0.07)))
+                }
+            }
+        }
+    }
+    private func chip(_ title: String, selected: Bool, muted: Bool, accent: Color, _ tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            HStack(spacing: 5) {
+                if muted { Image(systemName: "speaker.slash.fill").font(.system(size: 9)) }
+                Text(title).font(Theme.body(14))
+            }
+            .foregroundStyle(selected ? Theme.bgTop : Theme.frost.opacity(muted ? 0.4 : 0.85))
+            .padding(.vertical, 8).padding(.horizontal, 14)
+            .background(Capsule().fill(selected ? accent.opacity(0.9) : Color.white.opacity(0.07)))
+        }
+    }
+}
+
+// MARK: - Drum lane controls (sound/mute/remove per lane)
+
+private struct DrumLaneControls: View {
+    @ObservedObject var transport: TransportController
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(transport.drumLayers) { t in
+                    Menu {
+                        ForEach(DrumSound.allCases) { d in Button(d.name) { transport.setTrackSound(t.id, sound: d.rawValue) } }
+                        Divider()
+                        Button { transport.toggleMute(t.id) } label: { Label(t.muted ? "Unmute" : "Mute", systemImage: t.muted ? "speaker.slash" : "speaker.wave.2") }
+                        Button(role: .destructive) { transport.removeTrack(t.id) } label: { Label("Remove", systemImage: "trash") }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text(t.displayName).font(Theme.body(13)); Image(systemName: "chevron.down").font(.system(size: 8))
                         }
+                        .foregroundStyle(t.muted ? Theme.frost.opacity(0.4) : Theme.frost.opacity(0.85))
+                        .padding(.vertical, 7).padding(.horizontal, 11)
+                        .background(Capsule().fill(Color.white.opacity(0.07)))
                     }
                 }
-                .padding(.vertical, 4)
-            }
-            Menu {
-                ForEach(DrumSound.allCases) { d in Button(d.name) { transport.addDrumLayer(d) } }
-            } label: {
-                Label("Add drum", systemImage: "plus").font(Theme.body(13)).foregroundStyle(Theme.teal)
-            }
-        }
-    }
-}
-
-// MARK: - Shared cell
-
-struct Cell: View {
-    let on: Bool
-    let color: Color
-    let playhead: Bool
-    let beat: Bool
-    let rootRow: Bool
-    var ghost: Bool = false   // a note from another layer occupies this cell
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 4)
-            .fill(fill)
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(ghost && !on ? color.opacity(0.5) : .clear, lineWidth: 1)
-            )
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(playhead ? Theme.frost.opacity(0.9) : .clear, lineWidth: 1.5))
-            .frame(maxWidth: .infinity).frame(height: 22)
-            .shadow(color: on ? color.opacity(playhead ? 0.9 : 0.4) : .clear, radius: 5)
-    }
-    private var fill: Color {
-        if on { return color.opacity(playhead ? 1.0 : 0.85) }
-        if ghost { return color.opacity(0.20) }   // faint shadow of another layer's note
-        let base = beat ? 0.10 : 0.05
-        return Color.white.opacity(rootRow ? base + 0.05 : base)
-    }
-}
-
-// MARK: - Transport bar
-
-private struct TransportBar: View {
-    @ObservedObject var transport: TransportController
-
-    var body: some View {
-        HStack(spacing: 18) {
-            Button(action: transport.togglePlay) {
-                Image(systemName: transport.isPlaying ? "stop.fill" : "play.fill")
-                    .font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.bgTop)
-                    .frame(width: 58, height: 58)
-                    .background(Circle().fill(Theme.teal))
-                    .shadow(color: Theme.teal.opacity(transport.isPlaying ? 0.7 : 0.3), radius: 12)
-            }
-            Spacer()
-            HStack(spacing: 12) {
-                tempoButton("minus", delta: -1)
-                VStack(spacing: 0) {
-                    Text("\(Int(transport.tempo))").font(Theme.display(26)).foregroundStyle(Theme.frost).monospacedDigit()
-                    Text("BPM").font(Theme.light(11)).foregroundStyle(Theme.frost.opacity(0.5)).tracking(2)
+                Menu { ForEach(DrumSound.allCases) { d in Button(d.name) { transport.addDrumLayer(d) } } } label: {
+                    Image(systemName: "plus").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.teal)
+                        .frame(width: 34, height: 32).background(Capsule().fill(Color.white.opacity(0.07)))
                 }
-                .frame(width: 60)
-                tempoButton("plus", delta: 1)
             }
-        }
-        .padding(.vertical, 11).padding(.horizontal, 18)
-        .background(RoundedRectangle(cornerRadius: 20).fill(Color.white.opacity(0.06))
-            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.frost.opacity(0.12), lineWidth: 1)))
-    }
-    private func tempoButton(_ symbol: String, delta: Double) -> some View {
-        Button { transport.setTempo(transport.tempo + delta) } label: {
-            Image(systemName: symbol).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.frost)
-                .frame(width: 36, height: 36).background(Circle().fill(Color.white.opacity(0.08)))
         }
     }
 }
 
-#Preview { PatternStudioView() }
+// MARK: - Settings sheet (key / scale / tempo)
+
+private struct SettingsSheet: View {
+    @ObservedObject var transport: TransportController
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Key") {
+                    Picker("Root", selection: Binding(get: { transport.context.root }, set: { transport.setRoot($0) })) {
+                        ForEach(0..<12, id: \.self) { Text(MusicalContext.rootNames[$0]).tag($0) }
+                    }
+                    Picker("Scale", selection: Binding(get: { transport.context.scale }, set: { transport.setScale($0) })) {
+                        ForEach(Scale.allCases) { Text($0.displayName).tag($0) }
+                    }
+                }
+                Section("Tempo") {
+                    Stepper("\(Int(transport.tempo)) BPM", value: Binding(get: { transport.tempo }, set: { transport.setTempo($0) }), in: 60...200)
+                }
+            }
+            .navigationTitle("Project")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium])
+    }
+}
+
+#Preview { PatternStudioView(transport: TransportController()) }

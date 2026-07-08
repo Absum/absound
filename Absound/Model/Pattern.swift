@@ -1,10 +1,11 @@
 //
 //  Pattern.swift
-//  A multi-track pattern: an ordered list of layers, each either a melodic synth
-//  (its own preset + melody lane) or a drum (one percussion sound + on/off lane).
+//  Project model: global instrument Layers + multiple Patterns (per-layer step
+//  content) + a Song (sequence of pattern indices).
 //
-//  Melody is stored as scale-degree rows so changing key/scale re-voices while
-//  keeping contour. Codable so M4 can persist and arrange patterns into songs.
+//  Layers are shared across patterns — a pattern only changes what each layer
+//  plays. Melody is stored as scale-degree rows so key/scale changes re-voice.
+//  Codable so M-later can persist projects.
 //
 
 import Foundation
@@ -25,26 +26,16 @@ enum DrumSound: Int, CaseIterable, Identifiable, Codable {
     var name: String { ["Kick", "Snare", "Hat", "Open Hat", "Clap", "Tom", "Rim", "Perc"][rawValue] }
 }
 
-/// One layer. A synth layer uses `melody`; a drum layer uses `drumSteps`.
-struct LayerTrack: Identifiable, Codable {
+/// A global instrument (one engine track). Shared by every pattern.
+struct Layer: Identifiable, Codable {
     var id = UUID()
-    var engineId: Int = -1          // handle into the C++ track pool (runtime)
+    var engineId: Int = -1
     var kind: TrackKind
-    var sound: Int                  // SynthPreset.rawValue or DrumSound.rawValue
+    var sound: Int
     var muted: Bool = false
-    var melody: [Int?]
-    var drumSteps: [Bool]
 
-    static func synth(_ preset: SynthPreset) -> LayerTrack {
-        LayerTrack(kind: .synth, sound: preset.rawValue,
-                   melody: Array(repeating: nil, count: Pattern.stepCount),
-                   drumSteps: Array(repeating: false, count: Pattern.stepCount))
-    }
-    static func drum(_ sound: DrumSound) -> LayerTrack {
-        LayerTrack(kind: .drum, sound: sound.rawValue,
-                   melody: Array(repeating: nil, count: Pattern.stepCount),
-                   drumSteps: Array(repeating: false, count: Pattern.stepCount))
-    }
+    static func synth(_ preset: SynthPreset) -> Layer { Layer(kind: .synth, sound: preset.rawValue) }
+    static func drum(_ sound: DrumSound) -> Layer { Layer(kind: .drum, sound: sound.rawValue) }
 
     var displayName: String {
         kind == .synth ? (SynthPreset(rawValue: sound)?.name ?? "Synth")
@@ -61,13 +52,29 @@ struct LayerTrack: Identifiable, Codable {
     }
 }
 
-struct Pattern: Codable {
+/// One 16-step pattern: per-layer content keyed by layer id.
+struct PatternData: Identifiable, Codable {
+    var id = UUID()
+    var name: String
+    var melodies: [UUID: [Int?]] = [:]   // synth layer id -> rows
+    var drums: [UUID: [Bool]] = [:]      // drum layer id -> on/off
+
+    func melody(_ layer: UUID) -> [Int?] { melodies[layer] ?? Array(repeating: nil, count: Project.stepCount) }
+    func drumLane(_ layer: UUID) -> [Bool] { drums[layer] ?? Array(repeating: false, count: Project.stepCount) }
+}
+
+struct Project: Codable {
     static let stepCount = Int(AB_NUM_STEPS)
+    static let maxPatterns = Int(AB_MAX_PATTERNS)
+    static let patternNames = ["A", "B", "C", "D", "E", "F", "G", "H"]
 
     var contextRoot: Int
     var scaleRaw: String
     var baseOctave: Int
-    var tracks: [LayerTrack]
+    var layers: [Layer]
+    var patterns: [PatternData]
+    var song: [Int]                  // indices into `patterns`
+    var currentPatternIndex: Int     // which pattern the Studio edits
 
     var context: MusicalContext {
         MusicalContext(root: contextRoot,
@@ -75,30 +82,26 @@ struct Pattern: Codable {
                        baseOctave: baseOctave)
     }
 
-    init(context: MusicalContext = MusicalContext(), tracks: [LayerTrack] = []) {
-        contextRoot = context.root
-        scaleRaw = context.scale.rawValue
-        baseOctave = context.baseOctave
-        self.tracks = tracks
+    static func demo() -> Project {
+        let kick = Layer.drum(.kick), snare = Layer.drum(.snare), hat = Layer.drum(.hat)
+        let bass = Layer.synth(.bass), lead = Layer.synth(.lead)
+        let layers = [kick, snare, hat, bass, lead]
+
+        var a = PatternData(name: "A")
+        a.drums[kick.id] = boolLane([0, 4, 8, 11])
+        a.drums[snare.id] = boolLane([4, 12])
+        a.drums[hat.id] = boolLane(Array(0..<stepCount))
+        a.melodies[bass.id] = rowLane([(0, 0), (8, 0), (11, 2)])
+        a.melodies[lead.id] = rowLane([(0, 7), (3, 9), (6, 11), (8, 13), (10, 11), (13, 9), (14, 10)])
+
+        return Project(contextRoot: 0, scaleRaw: Scale.naturalMinor.rawValue, baseOctave: 3,
+                       layers: layers, patterns: [a], song: [0], currentPatternIndex: 0)
     }
 
-    /// A starter arrangement: a beat plus a bass and a lead layer.
-    static func demo() -> Pattern {
-        var kick = LayerTrack.drum(.kick)
-        for s in [0, 4, 8, 11] { kick.drumSteps[s] = true }
-        var snare = LayerTrack.drum(.snare)
-        for s in [4, 12] { snare.drumSteps[s] = true }
-        var hat = LayerTrack.drum(.hat)
-        for s in 0..<stepCount { hat.drumSteps[s] = true }
-
-        var bass = LayerTrack.synth(.bass)
-        for (s, r) in [(0, 0), (8, 0), (11, 2)] { bass.melody[s] = r }   // root/bass notes
-
-        var lead = LayerTrack.synth(.lead)
-        // C-minor riff as scale rows (baseOctave 3): row7=C4, 9=Eb4, 10=F4, 11=G4, 13=Bb4.
-        for (s, r) in [(0, 7), (3, 9), (6, 11), (8, 13), (10, 11), (13, 9), (14, 10)] { lead.melody[s] = r }
-
-        return Pattern(context: MusicalContext(root: 0, scale: .naturalMinor, baseOctave: 3),
-                       tracks: [kick, snare, hat, bass, lead])
+    private static func boolLane(_ on: [Int]) -> [Bool] {
+        var l = Array(repeating: false, count: stepCount); for s in on { l[s] = true }; return l
+    }
+    private static func rowLane(_ notes: [(Int, Int)]) -> [Int?] {
+        var l = [Int?](repeating: nil, count: stepCount); for (s, r) in notes { l[s] = r }; return l
     }
 }

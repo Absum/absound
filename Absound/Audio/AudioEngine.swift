@@ -71,6 +71,8 @@ final class AudioEngine {
     func setPlaying(_ playing: Bool) { ab_core_set_playing(core, playing ? 1 : 0) }
     var currentStep: Int { Int(ab_core_current_step(core)) }
     var playPosition: Double { ab_core_play_position(core) }
+    var currentPattern: Int { Int(ab_core_current_pattern(core)) }
+    var songPosition: Int { Int(ab_core_song_position(core)) }
 
     // Track pool.
     @discardableResult
@@ -78,13 +80,20 @@ final class AudioEngine {
     func removeTrack(_ engineId: Int) { ab_core_remove_track(core, Int32(engineId)) }
     func setTrackSound(_ engineId: Int, sound: Int) { ab_core_set_track_sound(core, Int32(engineId), Int32(sound)) }
     func setTrackMute(_ engineId: Int, muted: Bool) { ab_core_set_track_mute(core, Int32(engineId), muted ? 1 : 0) }
-    func clearTrack(_ engineId: Int) { ab_core_clear_track(core, Int32(engineId)) }
-    func clearAll() { ab_core_clear_all(core) }
+    func clearTrack(_ engineId: Int, pattern: Int) { ab_core_clear_track(core, Int32(engineId), Int32(pattern)) }
 
-    func setStep(track: Int, step: Int, note: Int, velocity: Int) {
-        ab_core_set_step(core, Int32(track), Int32(step), Int32(note), Int32(velocity))
+    func setStep(track: Int, pattern: Int, step: Int, note: Int, velocity: Int) {
+        ab_core_set_step(core, Int32(track), Int32(pattern), Int32(step), Int32(note), Int32(velocity))
     }
     func noteOn(track: Int, note: Int, velocity: Float) {
         ab_core_note_on(core, Int32(track), Int32(note), velocity)
+    }
+
+    // Patterns & song.
+    func setPattern(_ index: Int) { ab_core_set_pattern(core, Int32(index)) }
+    func setSongMode(_ on: Bool) { ab_core_set_song_mode(core, on ? 1 : 0) }
+    func setSong(_ seq: [Int]) {
+        var s = seq.map { Int32($0) }
+        ab_core_set_song(core, &s, Int32(s.count))
     }
 }

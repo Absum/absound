@@ -67,7 +67,7 @@ struct AuroraHighwayView: View {
             let laneW = size.width / CGFloat(lanes)
             let topMargin: CGFloat = 8
             let nowY = size.height - 6
-            let span = CGFloat(Pattern.stepCount)     // whole loop visible
+            let span = CGFloat(Project.stepCount)     // whole loop visible
             let pos = transport.playPosition          // -1 when stopped
             let ctxM = transport.context
 
@@ -94,11 +94,11 @@ struct AuroraHighwayView: View {
             // Shadow notes from the other layers (drawn dimmer, behind).
             if transport.showShadow {
                 for gm in transport.otherMelodies {
-                    for step in 0..<Pattern.stepCount {
+                    for step in 0..<Project.stepCount {
                         guard let row = gm[step], row >= octaveBase, row <= octaveBase + degreeCount else { continue }
                         let lane = row - octaveBase
-                        var dt = (Double(step) - p).truncatingRemainder(dividingBy: Double(Pattern.stepCount))
-                        if dt < 0 { dt += Double(Pattern.stepCount) }
+                        var dt = (Double(step) - p).truncatingRemainder(dividingBy: Double(Project.stepCount))
+                        if dt < 0 { dt += Double(Project.stepCount) }
                         let y = nowY - CGFloat(dt) / span * (nowY - topMargin)
                         let x = CGFloat(lane) * laneW + laneW / 2
                         let w = laneW * 0.5
@@ -109,12 +109,12 @@ struct AuroraHighwayView: View {
             }
 
             let melody = transport.selectedMelody
-            for step in 0..<Pattern.stepCount {
+            for step in 0..<Project.stepCount {
                 guard let row = melody[step] else { continue }
                 guard row >= octaveBase && row <= octaveBase + degreeCount else { continue }
                 let lane = row - octaveBase
-                var dt = (Double(step) - p).truncatingRemainder(dividingBy: Double(Pattern.stepCount))
-                if dt < 0 { dt += Double(Pattern.stepCount) }
+                var dt = (Double(step) - p).truncatingRemainder(dividingBy: Double(Project.stepCount))
+                if dt < 0 { dt += Double(Project.stepCount) }
                 let frac = CGFloat(dt) / span                       // 0 at now-line, 1 at top
                 let y = nowY - frac * (nowY - topMargin)
                 let x = CGFloat(lane) * laneW + laneW / 2

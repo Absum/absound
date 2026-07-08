@@ -1,9 +1,9 @@
 //
 //  TransportController.swift
-//  Bridge between the SwiftUI Studio and the audio engine. Owns the editable
-//  multi-track Pattern, manages the engine's track pool, and pushes every edit so
-//  changes audition live. Audio timing stays sample-accurate in C++; here we only
-//  poll the playhead for the on-screen step indicator / Highway scroll.
+//  Bridge between the SwiftUI Studio/Song and the audio engine. Owns the Project
+//  (global layers + patterns + song), manages the engine track pool, and pushes
+//  every edit so changes audition live. Editing targets the current pattern; the
+//  Song tab plays the whole arrangement.
 //
 
 import Combine
@@ -16,131 +16,241 @@ final class TransportController: ObservableObject {
     enum Selection: Equatable { case track(UUID); case drums }
 
     @Published private(set) var isPlaying = false
+    @Published private(set) var songPlaying = false
     @Published var tempo: Double = 112 { didSet { engine.setTempo(tempo) } }
     @Published private(set) var currentStep = -1
     @Published private(set) var playPosition: Double = -1
+    @Published private(set) var currentPattern = 0
+    @Published private(set) var songPosition = -1
     @Published var isRecording = false
-    @Published var showShadow = true   // ghost-notes of other layers in the melody editor
-    @Published private(set) var pattern: Pattern
+    @Published var showShadow = true
+    @Published private(set) var project: Project
     @Published var selection: Selection
 
     private let engine = AudioEngine()
     private var displayLink: CADisplayLink?
 
-    let stepCount = Pattern.stepCount
+    let stepCount = Project.stepCount
 
     init() {
-        var p = Pattern.demo()
-        // Register every layer with the engine and capture its handle.
-        for i in p.tracks.indices {
-            let t = p.tracks[i]
-            p.tracks[i].engineId = engine.addTrack(kind: t.kind.rawValue, sound: t.sound)
+        var p = Project.demo()
+        for i in p.layers.indices {
+            p.layers[i].engineId = engine.addTrack(kind: p.layers[i].kind.rawValue, sound: p.layers[i].sound)
         }
-        pattern = p
-        // Select the last melodic layer (the lead) by default.
-        selection = p.tracks.last(where: { $0.kind == .synth }).map { .track($0.id) } ?? .drums
+        project = p
+        selection = p.layers.last(where: { $0.kind == .synth }).map { .track($0.id) } ?? .drums
         engine.setTempo(tempo)
-        pushAllSteps()
+        engine.setSongMode(false)
+        engine.setPattern(p.currentPatternIndex)
+        pushEverything()
     }
 
     func onAppear() { engine.start() }
 
     // MARK: - Derived
 
-    var context: MusicalContext { pattern.context }
-    var melodyRowCount: Int { pattern.context.scale.degreeCount * 2 + 1 }
-    var melodicTracks: [LayerTrack] { pattern.tracks.filter { $0.kind == .synth } }
-    var drumTracks: [LayerTrack] { pattern.tracks.filter { $0.kind == .drum } }
+    var context: MusicalContext { project.context }
+    var melodyRowCount: Int { project.context.scale.degreeCount * 2 + 1 }
+    var melodicLayers: [Layer] { project.layers.filter { $0.kind == .synth } }
+    var drumLayers: [Layer] { project.layers.filter { $0.kind == .drum } }
+    var editIndex: Int { project.currentPatternIndex }
 
-    var selectedTrackId: UUID? { if case .track(let id) = selection { return id }; return nil }
-    var selectedTrack: LayerTrack? { selectedTrackId.flatMap { id in pattern.tracks.first { $0.id == id } } }
-    var selectedMelody: [Int?] { selectedTrack?.melody ?? Array(repeating: nil, count: stepCount) }
-    /// Melodies of the other synth layers (for shadow/ghost rendering).
-    var otherMelodies: [[Int?]] {
-        guard let sel = selectedTrackId else { return [] }
-        return pattern.tracks.filter { $0.kind == .synth && $0.id != sel }.map { $0.melody }
+    var selectedLayerId: UUID? { if case .track(let id) = selection { return id }; return nil }
+    var selectedLayer: Layer? { selectedLayerId.flatMap { id in project.layers.first { $0.id == id } } }
+    var selectedPreset: SynthPreset { SynthPreset(rawValue: selectedLayer?.sound ?? 0) ?? .pluck }
+
+    var selectedMelody: [Int?] {
+        guard let id = selectedLayerId else { return Array(repeating: nil, count: stepCount) }
+        return project.patterns[editIndex].melody(id)
     }
-    var selectedPreset: SynthPreset { SynthPreset(rawValue: selectedTrack?.sound ?? 0) ?? .pluck }
+    var otherMelodies: [[Int?]] {
+        guard let sel = selectedLayerId else { return [] }
+        return melodicLayers.filter { $0.id != sel }.map { project.patterns[editIndex].melody($0.id) }
+    }
+    func drumLane(_ id: UUID) -> [Bool] { project.patterns[editIndex].drumLane(id) }
 
-    private func index(_ id: UUID) -> Int? { pattern.tracks.firstIndex { $0.id == id } }
+    private func layer(_ id: UUID) -> Layer? { project.layers.first { $0.id == id } }
+    private func layerIndex(_ id: UUID) -> Int? { project.layers.firstIndex { $0.id == id } }
 
     // MARK: - Transport
 
-    func togglePlay() { isPlaying ? stop() : play() }
-    func play() { engine.start(); engine.setPlaying(true); isPlaying = true; startPolling() }
-    func stop() { engine.setPlaying(false); isPlaying = false; stopPolling(); currentStep = -1; playPosition = -1 }
+    func togglePlay() { isPlaying ? stop() : playPattern() }
+
+    func playPattern() {
+        engine.start(); engine.setSongMode(false); engine.setPattern(editIndex)
+        engine.setPlaying(true); isPlaying = true; songPlaying = false; startPolling()
+    }
+    func playSong() {
+        guard !project.song.isEmpty else { return }
+        engine.start(); engine.setSong(project.song); engine.setSongMode(true)
+        engine.setPlaying(true); isPlaying = true; songPlaying = true; startPolling()
+    }
+    func toggleSong() { isPlaying ? stop() : playSong() }
+
+    func stop() {
+        engine.setPlaying(false); isPlaying = false; songPlaying = false
+        stopPolling(); currentStep = -1; playPosition = -1
+    }
     func setTempo(_ bpm: Double) { tempo = min(max(bpm, 60), 200) }
 
     // MARK: - Layer management
 
     func addSynthLayer(_ preset: SynthPreset) {
-        var t = LayerTrack.synth(preset)
-        t.engineId = engine.addTrack(kind: TrackKind.synth.rawValue, sound: preset.rawValue)
-        guard t.engineId >= 0 else { return }
-        pattern.tracks.append(t)
-        selection = .track(t.id)
+        var l = Layer.synth(preset)
+        l.engineId = engine.addTrack(kind: TrackKind.synth.rawValue, sound: preset.rawValue)
+        guard l.engineId >= 0 else { return }
+        project.layers.append(l)
+        selection = .track(l.id)
     }
-
     func addDrumLayer(_ sound: DrumSound) {
-        var t = LayerTrack.drum(sound)
-        t.engineId = engine.addTrack(kind: TrackKind.drum.rawValue, sound: sound.rawValue)
-        guard t.engineId >= 0 else { return }
-        pattern.tracks.append(t)
+        var l = Layer.drum(sound)
+        l.engineId = engine.addTrack(kind: TrackKind.drum.rawValue, sound: sound.rawValue)
+        guard l.engineId >= 0 else { return }
+        project.layers.append(l)
     }
-
     func removeTrack(_ id: UUID) {
-        guard let i = index(id) else { return }
-        engine.removeTrack(pattern.tracks[i].engineId)
-        let wasSelected = selectedTrackId == id
-        pattern.tracks.remove(at: i)
-        if wasSelected { selection = melodicTracks.last.map { .track($0.id) } ?? .drums }
+        guard let i = layerIndex(id) else { return }
+        engine.removeTrack(project.layers[i].engineId)
+        let wasSel = selectedLayerId == id
+        project.layers.remove(at: i)
+        for p in project.patterns.indices { project.patterns[p].melodies[id] = nil; project.patterns[p].drums[id] = nil }
+        if wasSel { selection = melodicLayers.last.map { .track($0.id) } ?? .drums }
     }
-
     func toggleMute(_ id: UUID) {
-        guard let i = index(id) else { return }
-        pattern.tracks[i].muted.toggle()
-        engine.setTrackMute(pattern.tracks[i].engineId, muted: pattern.tracks[i].muted)
+        guard let i = layerIndex(id) else { return }
+        project.layers[i].muted.toggle()
+        engine.setTrackMute(project.layers[i].engineId, muted: project.layers[i].muted)
     }
-
     func setTrackSound(_ id: UUID, sound: Int) {
-        guard let i = index(id) else { return }
-        pattern.tracks[i].sound = sound
-        engine.setTrackSound(pattern.tracks[i].engineId, sound: sound)
+        guard let i = layerIndex(id) else { return }
+        project.layers[i].sound = sound
+        engine.setTrackSound(project.layers[i].engineId, sound: sound)
     }
-
     func select(_ id: UUID) { selection = .track(id) }
     func selectDrums() { selection = .drums }
 
-    // MARK: - Editing: melody (operates on the selected synth track)
+    // MARK: - Pattern management
+
+    var patternNames: [String] { project.patterns.map(\.name) }
+
+    func selectPattern(_ index: Int) {
+        guard index >= 0, index < project.patterns.count else { return }
+        project.currentPatternIndex = index
+        engine.setPattern(index)
+        objectWillChange.send()
+    }
+    func addPattern() {
+        guard project.patterns.count < Project.maxPatterns else { return }
+        let name = Project.patternNames[project.patterns.count]
+        project.patterns.append(PatternData(name: name))
+        selectPattern(project.patterns.count - 1)   // empty pattern already clear in engine
+    }
+    func duplicatePattern() {
+        guard project.patterns.count < Project.maxPatterns else { return }
+        var copy = project.patterns[editIndex]
+        copy.id = UUID()
+        copy.name = Project.patternNames[project.patterns.count]
+        project.patterns.append(copy)
+        let newIndex = project.patterns.count - 1
+        project.currentPatternIndex = newIndex
+        engine.setPattern(newIndex)
+        pushPattern(newIndex)
+    }
+
+    // MARK: - Song management
+
+    func appendSection(_ patternIndex: Int) {
+        guard project.song.count < Int(AB_MAX_SONG_LEN) else { return }
+        project.song.append(patternIndex)
+        engine.setSong(project.song)
+    }
+    func removeSection(at i: Int) {
+        guard i >= 0, i < project.song.count else { return }
+        project.song.remove(at: i)
+        engine.setSong(project.song)
+        if project.song.isEmpty && songPlaying { stop() }
+    }
+    func clearSong() { project.song.removeAll(); engine.setSong(project.song); if songPlaying { stop() } }
+
+    // MARK: - Editing: melody (selected synth layer, current pattern)
 
     func toggleMelody(row: Int, step: Int) {
-        guard let i = selectedTrackId.flatMap(index) else { return }
-        if pattern.tracks[i].melody[step] == row {
-            pattern.tracks[i].melody[step] = nil
-            engine.setStep(track: pattern.tracks[i].engineId, step: step, note: 0, velocity: 0)
+        guard let l = selectedLayer, l.kind == .synth else { return }
+        var lane = project.patterns[editIndex].melody(l.id)
+        if lane[step] == row {
+            lane[step] = nil
+            engine.setStep(track: l.engineId, pattern: editIndex, step: step, note: 0, velocity: 0)
         } else {
-            pattern.tracks[i].melody[step] = row
-            let midi = pattern.context.midiNote(forRow: row)
-            engine.setStep(track: pattern.tracks[i].engineId, step: step, note: midi, velocity: pattern.tracks[i].melodyVelocity)
-            engine.start(); engine.noteOn(track: pattern.tracks[i].engineId, note: midi, velocity: 0.9)
+            lane[step] = row
+            let midi = context.midiNote(forRow: row)
+            engine.setStep(track: l.engineId, pattern: editIndex, step: step, note: midi, velocity: l.melodyVelocity)
+            engine.start(); engine.noteOn(track: l.engineId, note: midi, velocity: 0.9)
+        }
+        project.patterns[editIndex].melodies[l.id] = lane
+    }
+    func placeMelody(row: Int, step: Int) {
+        guard let l = selectedLayer, l.kind == .synth else { return }
+        var lane = project.patterns[editIndex].melody(l.id)
+        guard lane[step] != row else { return }   // already there (paint dedupe)
+        lane[step] = row
+        project.patterns[editIndex].melodies[l.id] = lane
+        engine.setStep(track: l.engineId, pattern: editIndex, step: step,
+                       note: context.midiNote(forRow: row), velocity: l.melodyVelocity)
+    }
+
+    func clearMelodyStep(_ step: Int) {
+        guard let l = selectedLayer, l.kind == .synth else { return }
+        var lane = project.patterns[editIndex].melody(l.id)
+        guard lane[step] != nil else { return }
+        lane[step] = nil
+        project.patterns[editIndex].melodies[l.id] = lane
+        engine.setStep(track: l.engineId, pattern: editIndex, step: step, note: 0, velocity: 0)
+    }
+
+    /// Drag-paint a drum cell to an explicit on/off state (no toggle).
+    func setDrum(_ id: UUID, step: Int, on: Bool) {
+        guard let l = layer(id) else { return }
+        var lane = project.patterns[editIndex].drumLane(id)
+        guard lane[step] != on else { return }
+        lane[step] = on
+        project.patterns[editIndex].drums[id] = lane
+        engine.setStep(track: l.engineId, pattern: editIndex, step: step, note: 0, velocity: on ? l.drumVelocity : 0)
+    }
+
+    /// Basic in-scale melody generator (placeholder for the future smart generator).
+    /// A gentle random walk over scale degrees with some rests, anchored near the root.
+    func generateMelody() {
+        guard let l = selectedLayer, l.kind == .synth else { return }
+        let maxRow = melodyRowCount - 1
+        var seed = UInt64(0x9E3779B9 ^ (UInt64(editIndex) << 8) ^ UInt64(l.engineId & 0xFF))
+        func rnd(_ n: Int) -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int((seed >> 33) % UInt64(max(n, 1))) }
+
+        var row = min(maxRow, project.context.scale.degreeCount) // start around the octave root
+        var lane = [Int?](repeating: nil, count: stepCount)
+        for s in 0..<stepCount {
+            // Rest on some off-beats for phrasing.
+            if s % 2 == 1 && rnd(100) < 45 { continue }
+            let stepMove = [-2, -1, -1, 0, 1, 1, 2][rnd(7)]
+            row = min(maxRow, max(0, row + stepMove))
+            // Land on the root/fifth on strong beats for a musical feel.
+            if s % 8 == 0 { row = min(maxRow, (row / project.context.scale.degreeCount) * project.context.scale.degreeCount) }
+            lane[s] = row
+        }
+        project.patterns[editIndex].melodies[l.id] = lane
+        // Push the whole lane.
+        for s in 0..<stepCount {
+            if let r = lane[s] {
+                engine.setStep(track: l.engineId, pattern: editIndex, step: s, note: context.midiNote(forRow: r), velocity: l.melodyVelocity)
+            } else {
+                engine.setStep(track: l.engineId, pattern: editIndex, step: s, note: 0, velocity: 0)
+            }
         }
     }
-
-    func placeMelody(row: Int, step: Int) {
-        guard let i = selectedTrackId.flatMap(index) else { return }
-        pattern.tracks[i].melody[step] = row
-        engine.setStep(track: pattern.tracks[i].engineId, step: step,
-                       note: pattern.context.midiNote(forRow: row), velocity: pattern.tracks[i].melodyVelocity)
-    }
-
     func audition(row: Int) {
-        guard let t = selectedTrack else { return }
-        engine.start()
-        engine.noteOn(track: t.engineId, note: pattern.context.midiNote(forRow: row), velocity: 0.9)
+        guard let l = selectedLayer else { return }
+        engine.start(); engine.noteOn(track: l.engineId, note: context.midiNote(forRow: row), velocity: 0.9)
     }
-
     func toggleRecord() { isRecording.toggle() }
-
     func highwayTap(row: Int) {
         audition(row: row)
         guard isRecording, isPlaying, playPosition >= 0 else { return }
@@ -150,71 +260,83 @@ final class TransportController: ObservableObject {
     // MARK: - Editing: drums
 
     func toggleDrum(_ id: UUID, step: Int) {
-        guard let i = index(id) else { return }
-        let on = !pattern.tracks[i].drumSteps[step]
-        pattern.tracks[i].drumSteps[step] = on
-        let t = pattern.tracks[i]
-        engine.setStep(track: t.engineId, step: step, note: 0, velocity: on ? t.drumVelocity : 0)
-        if on { engine.start(); engine.noteOn(track: t.engineId, note: 0, velocity: Float(t.drumVelocity) / 127) }
+        guard let l = layer(id) else { return }
+        var lane = project.patterns[editIndex].drumLane(id)
+        let on = !lane[step]
+        lane[step] = on
+        project.patterns[editIndex].drums[id] = lane
+        engine.setStep(track: l.engineId, pattern: editIndex, step: step, note: 0, velocity: on ? l.drumVelocity : 0)
+        if on { engine.start(); engine.noteOn(track: l.engineId, note: 0, velocity: Float(l.drumVelocity) / 127) }
     }
 
     // MARK: - Context + clear
 
-    func setRoot(_ root: Int) { pattern.contextRoot = ((root % 12) + 12) % 12; repushAllMelodies() }
-
+    func setRoot(_ root: Int) { project.contextRoot = ((root % 12) + 12) % 12; repushAllMelodies() }
     func setScale(_ scale: Scale) {
-        pattern.scaleRaw = scale.rawValue
+        project.scaleRaw = scale.rawValue
         let maxRow = scale.degreeCount * 2
-        for i in pattern.tracks.indices where pattern.tracks[i].kind == .synth {
-            for s in pattern.tracks[i].melody.indices {
-                if let row = pattern.tracks[i].melody[s], row > maxRow { pattern.tracks[i].melody[s] = maxRow }
+        for p in project.patterns.indices {
+            for l in melodicLayers {
+                if var lane = project.patterns[p].melodies[l.id] {
+                    for s in lane.indices { if let r = lane[s], r > maxRow { lane[s] = maxRow } }
+                    project.patterns[p].melodies[l.id] = lane
+                }
             }
         }
         repushAllMelodies()
     }
-
     func clearCurrent() {
         switch selection {
         case .drums:
-            for i in pattern.tracks.indices where pattern.tracks[i].kind == .drum {
-                pattern.tracks[i].drumSteps = Array(repeating: false, count: stepCount)
-                engine.clearTrack(pattern.tracks[i].engineId)
+            for l in drumLayers {
+                project.patterns[editIndex].drums[l.id] = Array(repeating: false, count: stepCount)
+                engine.clearTrack(l.engineId, pattern: editIndex)
             }
         case .track(let id):
-            guard let i = index(id) else { return }
-            pattern.tracks[i].melody = Array(repeating: nil, count: stepCount)
-            engine.clearTrack(pattern.tracks[i].engineId)
+            guard let l = layer(id) else { return }
+            project.patterns[editIndex].melodies[id] = Array(repeating: nil, count: stepCount)
+            engine.clearTrack(l.engineId, pattern: editIndex)
         }
     }
 
     // MARK: - Engine sync
 
-    private func pushAllSteps() {
-        engine.clearAll()
-        for t in pattern.tracks {
-            if t.kind == .drum {
-                for s in 0..<stepCount where t.drumSteps[s] {
-                    engine.setStep(track: t.engineId, step: s, note: 0, velocity: t.drumVelocity)
+    private func pushEverything() { for p in project.patterns.indices { pushPattern(p) } }
+
+    private func pushPattern(_ p: Int) {
+        let ctx = project.context
+        for l in project.layers {
+            if l.kind == .drum {
+                let lane = project.patterns[p].drumLane(l.id)
+                for s in 0..<stepCount {
+                    engine.setStep(track: l.engineId, pattern: p, step: s, note: 0, velocity: lane[s] ? l.drumVelocity : 0)
                 }
             } else {
-                pushMelody(t)
+                let lane = project.patterns[p].melody(l.id)
+                for s in 0..<stepCount {
+                    if let row = lane[s] {
+                        engine.setStep(track: l.engineId, pattern: p, step: s, note: ctx.midiNote(forRow: row), velocity: l.melodyVelocity)
+                    } else {
+                        engine.setStep(track: l.engineId, pattern: p, step: s, note: 0, velocity: 0)
+                    }
+                }
             }
         }
     }
-
-    private func pushMelody(_ t: LayerTrack) {
-        let ctx = pattern.context
-        for s in 0..<stepCount {
-            if let row = t.melody[s] {
-                engine.setStep(track: t.engineId, step: s, note: ctx.midiNote(forRow: row), velocity: t.melodyVelocity)
-            } else {
-                engine.setStep(track: t.engineId, step: s, note: 0, velocity: 0)
-            }
-        }
-    }
-
     private func repushAllMelodies() {
-        for t in pattern.tracks where t.kind == .synth { pushMelody(t) }
+        let ctx = project.context
+        for p in project.patterns.indices {
+            for l in melodicLayers {
+                let lane = project.patterns[p].melody(l.id)
+                for s in 0..<stepCount {
+                    if let row = lane[s] {
+                        engine.setStep(track: l.engineId, pattern: p, step: s, note: ctx.midiNote(forRow: row), velocity: l.melodyVelocity)
+                    } else {
+                        engine.setStep(track: l.engineId, pattern: p, step: s, note: 0, velocity: 0)
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Playhead polling
@@ -232,5 +354,9 @@ final class TransportController: ObservableObject {
         let s = engine.currentStep
         if s != currentStep { currentStep = s }
         playPosition = engine.playPosition
+        let p = engine.currentPattern
+        if p != currentPattern { currentPattern = p }
+        let sp = engine.songPosition
+        if sp != songPosition { songPosition = sp }
     }
 }

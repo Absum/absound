@@ -8,13 +8,14 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var selection = 0
+    @StateObject private var transport = TransportController()
 
     var body: some View {
         TabView(selection: $selection) {
-            PatternStudioView()
+            PatternStudioView(transport: transport)
                 .tag(0)
                 .tabItem { Label("Studio", systemImage: "square.grid.3x3.fill") }
-            ComingSoon(title: "Song")
+            SongArrangerView(transport: transport)
                 .tag(1)
                 .tabItem { Label("Song", systemImage: "rectangle.stack.fill") }
             ComingSoon(title: "Settings")
@@ -23,6 +24,11 @@ struct ContentView: View {
         }
         .tint(Theme.teal)
         .preferredColorScheme(.dark)
+        .onAppear {
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["ABSOUND_START_TAB"] == "song" { selection = 1 }
+            #endif
+        }
     }
 }
 
