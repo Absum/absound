@@ -20,6 +20,7 @@ struct SongArrangerView: View {
     @EnvironmentObject var toast: ToastCenter
     @State private var showSongs = false
     @State private var confirmClearSong = false
+    @State private var confirmRemoveSection: Int?
     @State private var midiExport: MidiExportItem?
 
     private var song: [Int] { transport.project.song }
@@ -57,6 +58,20 @@ struct SongArrangerView: View {
         .sheet(item: $midiExport) { item in
             ShareSheet(url: item.url)
                 .presentationDetents([.medium])
+        }
+        .confirmationDialog(
+            "Remove section \((confirmRemoveSection ?? 0) + 1) from the arrangement?",
+            isPresented: Binding(get: { confirmRemoveSection != nil },
+                                 set: { if !$0 { confirmRemoveSection = nil } }),
+            titleVisibility: .visible) {
+            Button("Remove section", role: .destructive) {
+                if let i = confirmRemoveSection {
+                    transport.removeSection(at: i)
+                    toast.show("Section removed", icon: "trash.circle.fill")
+                }
+                confirmRemoveSection = nil
+            }
+            Button("Cancel", role: .cancel) { confirmRemoveSection = nil }
         }
         .confirmationDialog("Clear the whole arrangement? (Patterns are kept.)",
                             isPresented: $confirmClearSong, titleVisibility: .visible) {
@@ -106,8 +121,7 @@ struct SongArrangerView: View {
                         ForEach(Array(song.enumerated()), id: \.offset) { i, patternIdx in
                             let playing = transport.songPlaying && playhead.songPosition == i
                             Button {
-                                transport.removeSection(at: i)
-                                toast.show("Section removed", icon: "trash.circle.fill")
+                                confirmRemoveSection = i
                             } label: {
                                 Text(names.indices.contains(patternIdx) ? names[patternIdx] : "?")
                                     .font(Theme.title(18))

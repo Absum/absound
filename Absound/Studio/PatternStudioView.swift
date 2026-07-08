@@ -150,7 +150,7 @@ struct PatternStudioView: View {
                 layerMenu(layer)
             }
         } else if case .drums = transport.selection {
-            DrumLaneControls(transport: transport)
+            DrumLaneControls(transport: transport, requestRemove: { confirmRemoveLayer = $0 })
         }
     }
 
@@ -345,6 +345,7 @@ private struct LayerStrip: View {
 
 private struct DrumLaneControls: View {
     @ObservedObject var transport: TransportController
+    var requestRemove: (UUID) -> Void = { _ in }
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -354,7 +355,7 @@ private struct DrumLaneControls: View {
                         Divider()
                         Button { transport.toggleMute(t.id) } label: { Label(t.muted ? "Unmute" : "Mute", systemImage: t.muted ? "speaker.slash" : "speaker.wave.2") }
                         Button { transport.toggleSolo(t.id) } label: { Label(t.soloed ? "Unsolo" : "Solo", systemImage: "headphones") }
-                        Button(role: .destructive) { transport.removeTrack(t.id) } label: { Label("Remove", systemImage: "trash") }
+                        Button(role: .destructive) { requestRemove(t.id) } label: { Label("Remove", systemImage: "trash") }
                     } label: {
                         HStack(spacing: 3) {
                             Text(t.displayName).font(Theme.body(13)); Image(systemName: "chevron.down").font(.system(size: 8))

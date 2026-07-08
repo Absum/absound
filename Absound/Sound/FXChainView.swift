@@ -18,6 +18,8 @@ struct FXChainView: View {
 
     @State private var working: [FXSlot] = []
     @State private var draggedSlot: UUID?
+    @State private var confirmRemove: UUID?
+    @EnvironmentObject var toast: ToastCenter
 
     var body: some View {
         VStack(spacing: 10) {
@@ -54,6 +56,22 @@ struct FXChainView: View {
         .onDrop(of: [.text], isTargeted: nil) { _ in commit(); return true }
         // Rescue: if a drag session dies without any drop event, the next tap clears it.
         .simultaneousGesture(TapGesture().onEnded { if draggedSlot != nil { commit() } })
+        .confirmationDialog(
+            "Remove \(working.first { $0.id == confirmRemove }?.type.name ?? "this effect") from the chain?",
+            isPresented: Binding(get: { confirmRemove != nil },
+                                 set: { if !$0 { confirmRemove = nil } }),
+            titleVisibility: .visible) {
+            Button("Remove effect", role: .destructive) {
+                if let id = confirmRemove, let i = working.firstIndex(where: { $0.id == id }) {
+                    let name = working[i].type.name
+                    working.remove(at: i)
+                    commit()
+                    toast.show("\(name) removed", icon: "trash.circle.fill")
+                }
+                confirmRemove = nil
+            }
+            Button("Cancel", role: .cancel) { confirmRemove = nil }
+        }
         .onAppear { working = chain }
         .onChange(of: chain) { _, newValue in
             if draggedSlot == nil && newValue != working { working = newValue }
@@ -94,7 +112,7 @@ struct FXChainView: View {
                     if idx < working.count - 1 {
                         Button { working.swapAt(idx, idx + 1); commit() } label: { Label("Move later", systemImage: "arrow.down") }
                     }
-                    Button(role: .destructive) { working.remove(at: idx); commit() } label: { Label("Remove", systemImage: "trash") }
+                    Button(role: .destructive) { confirmRemove = slot.id } label: { Label("Remove", systemImage: "trash") }
                 } label: {
                     Image(systemName: "ellipsis.circle").foregroundStyle(Theme.frost.opacity(0.7))
                 }

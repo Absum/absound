@@ -23,6 +23,7 @@ struct SoundLabView: View {
     @State private var mode: Mode = .simple
     @State private var original: SynthPatch?
     @State private var showRename = false
+    @State private var confirmRevert = false
     @State private var newName = ""
 
     enum Mode: String, CaseIterable { case simple = "Simple", advanced = "Advanced" }
@@ -96,7 +97,7 @@ struct SoundLabView: View {
                         Button { newName = current.name; showRename = true } label: {
                             Label("Rename", systemImage: "pencil")
                         }
-                        Button { revert() } label: { Label("Revert changes", systemImage: "arrow.uturn.backward") }
+                        Button(role: .destructive) { confirmRevert = true } label: { Label("Revert changes", systemImage: "arrow.uturn.backward") }
                     } label: { Image(systemName: "ellipsis.circle") }
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -106,6 +107,11 @@ struct SoundLabView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .confirmationDialog("Discard all changes since opening this sound?",
+                                isPresented: $confirmRevert, titleVisibility: .visible) {
+                Button("Revert changes", role: .destructive) { revert() }
+                Button("Cancel", role: .cancel) {}
             }
             .alert("Rename sound", isPresented: $showRename) {
                 TextField("Name", text: $newName)
