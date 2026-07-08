@@ -75,8 +75,8 @@ struct SoundsTabView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("SOUND LAB").font(Theme.display(24)).foregroundStyle(Theme.frost).tracking(4)
-            Text("Tap a sound to open it in the Lab — no layer needed")
+            Text("SOUNDS").font(Theme.display(24)).foregroundStyle(Theme.frost).tracking(4)
+            Text("Tap any sound to shape it in the Sound Lab — no layer needed")
                 .font(Theme.light(12)).foregroundStyle(Theme.frost.opacity(0.45))
         }
     }

@@ -20,7 +20,7 @@ struct PatternStudioView: View {
     @EnvironmentObject var toast: ToastCenter
     @Environment(\.verticalSizeClass) private var vSize
 
-    enum MelodyMode: String, CaseIterable { case roll = "Roll", play = "Play" }
+    enum MelodyMode: String, CaseIterable { case roll = "Roll", play = "Pads" }
 
     private var melodicSelected: Bool {
         if case .track = transport.selection, transport.selectedLayer?.kind == .synth { return true }
@@ -109,7 +109,7 @@ struct PatternStudioView: View {
             Button { showSettings = true } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "key").font(.system(size: 11))
-                    Text("\(transport.context.displayName) · \(Int(transport.tempo))").font(Theme.body(14)).lineLimit(1)
+                    Text(transport.context.displayName).font(Theme.body(14)).lineLimit(1)
                     Image(systemName: "chevron.down").font(.system(size: 9))
                 }
                 .foregroundStyle(Theme.frost)
@@ -122,6 +122,7 @@ struct PatternStudioView: View {
             Menu {
                 Button { transport.addPattern() } label: { Label("Add pattern", systemImage: "plus") }
                 Button { transport.duplicatePattern() } label: { Label("Duplicate pattern", systemImage: "doc.on.doc") }
+                Divider()
                 Button {
                     if let url = MidiExport.export(transport.project) { midiExport = MidiExportItem(url: url) }
                 } label: { Label("Export MIDI", systemImage: "square.and.arrow.up") }
@@ -146,6 +147,10 @@ struct PatternStudioView: View {
                     ForEach(MelodyMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented).frame(width: 130)
+                if transport.isRecording {
+                    Circle().fill(Color.red).frame(width: 7, height: 7)
+                        .shadow(color: .red.opacity(0.8), radius: 2)
+                }
                 Spacer()
                 layerMenu(layer)
             }
@@ -195,8 +200,16 @@ struct PatternStudioView: View {
     }
 
     private var transportBar: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 14) {
             playButton(size: 56)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(transport.songPlaying ? "SONG" : "PATTERN")
+                    .font(Theme.light(10)).foregroundStyle(Theme.frost.opacity(0.45)).tracking(2)
+                Text(transport.songPlaying ? transport.project.name
+                     : (transport.patternNames.indices.contains(transport.editIndex)
+                        ? transport.patternNames[transport.editIndex] : ""))
+                    .font(Theme.title(15)).foregroundStyle(Theme.frost.opacity(0.85)).lineLimit(1)
+            }
             Spacer()
             HStack(spacing: 12) {
                 tempoButton("minus", -1)

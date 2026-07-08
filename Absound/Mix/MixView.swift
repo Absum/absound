@@ -77,11 +77,19 @@ struct MixView: View {
                     HStack {
                         Text("MIX").font(Theme.display(24)).foregroundStyle(Theme.frost).tracking(4)
                         Spacer()
-                        Button(action: transport.togglePlay) {
-                            Image(systemName: transport.isPlaying ? "stop.fill" : "play.fill")
-                                .font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.bgTop)
-                                .frame(width: 40, height: 40)
-                                .background(Circle().fill(Theme.teal))
+                        HStack(spacing: 8) {
+                            Text(transport.project.song.isEmpty ? "PATTERN" : "SONG")
+                                .font(Theme.light(10)).foregroundStyle(Theme.frost.opacity(0.45)).tracking(2)
+                            Button {
+                                if transport.isPlaying { transport.stop() }
+                                else if transport.project.song.isEmpty { transport.playPattern() }
+                                else { transport.playSong() }
+                            } label: {
+                                Image(systemName: transport.isPlaying ? "stop.fill" : "play.fill")
+                                    .font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.bgTop)
+                                    .frame(width: 40, height: 40)
+                                    .background(Circle().fill(Theme.teal))
+                            }
                         }
                     }
                     masterStrip
