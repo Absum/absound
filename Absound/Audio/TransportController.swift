@@ -35,7 +35,9 @@ final class TransportController: ObservableObject {
     init() {
         var p = Project.demo()
         for i in p.layers.indices {
-            p.layers[i].engineId = engine.addTrack(kind: p.layers[i].kind.rawValue, sound: p.layers[i].sound)
+            let l = p.layers[i]
+            p.layers[i].engineId = engine.addTrack(kind: l.kind.rawValue, sound: l.sound)
+            if let patch = l.patch { engine.setPatch(p.layers[i].engineId, patch.toAB()) }
         }
         project = p
         selection = p.layers.last(where: { $0.kind == .synth }).map { .track($0.id) } ?? .drums
@@ -57,7 +59,7 @@ final class TransportController: ObservableObject {
 
     var selectedLayerId: UUID? { if case .track(let id) = selection { return id }; return nil }
     var selectedLayer: Layer? { selectedLayerId.flatMap { id in project.layers.first { $0.id == id } } }
-    var selectedPreset: SynthPreset { SynthPreset(rawValue: selectedLayer?.sound ?? 0) ?? .pluck }
+    var selectedPatch: SynthPatch? { selectedLayer?.patch }
 
     var selectedMelody: [Int?] {
         guard let id = selectedLayerId else { return Array(repeating: nil, count: stepCount) }
@@ -95,12 +97,20 @@ final class TransportController: ObservableObject {
 
     // MARK: - Layer management
 
-    func addSynthLayer(_ preset: SynthPreset) {
-        var l = Layer.synth(preset)
-        l.engineId = engine.addTrack(kind: TrackKind.synth.rawValue, sound: preset.rawValue)
+    func addSynthLayer(_ patch: SynthPatch) {
+        var l = Layer.synth(patch)
+        l.engineId = engine.addTrack(kind: TrackKind.synth.rawValue, sound: 0)
         guard l.engineId >= 0 else { return }
+        engine.setPatch(l.engineId, patch.toAB())
         project.layers.append(l)
         selection = .track(l.id)
+    }
+
+    /// Apply a patch to a synth layer (from the browser or the Sound Lab), live.
+    func applyPatch(_ id: UUID, patch: SynthPatch) {
+        guard let i = layerIndex(id), project.layers[i].kind == .synth else { return }
+        project.layers[i].patch = patch
+        engine.setPatch(project.layers[i].engineId, patch.toAB())
     }
     func addDrumLayer(_ sound: DrumSound) {
         var l = Layer.drum(sound)

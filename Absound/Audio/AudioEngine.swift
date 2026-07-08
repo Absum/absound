@@ -79,6 +79,10 @@ final class AudioEngine {
     func addTrack(kind: Int, sound: Int) -> Int { Int(ab_core_add_track(core, Int32(kind), Int32(sound))) }
     func removeTrack(_ engineId: Int) { ab_core_remove_track(core, Int32(engineId)) }
     func setTrackSound(_ engineId: Int, sound: Int) { ab_core_set_track_sound(core, Int32(engineId), Int32(sound)) }
+    func setPatch(_ engineId: Int, _ patch: ABPatch) {
+        var p = patch
+        ab_core_set_patch(core, Int32(engineId), &p)
+    }
     func setTrackMute(_ engineId: Int, muted: Bool) { ab_core_set_track_mute(core, Int32(engineId), muted ? 1 : 0) }
     func clearTrack(_ engineId: Int, pattern: Int) { ab_core_clear_track(core, Int32(engineId), Int32(pattern)) }
 

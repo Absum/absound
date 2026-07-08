@@ -12,13 +12,6 @@ import Foundation
 
 enum TrackKind: Int, Codable { case synth = 0, drum = 1 }
 
-/// Synth timbres — rawValue matches the engine's AB_SYNTH_* enum.
-enum SynthPreset: Int, CaseIterable, Identifiable, Codable {
-    case pluck = 0, bass, lead, keys
-    var id: Int { rawValue }
-    var name: String { ["Pluck", "Bass", "Lead", "Keys"][rawValue] }
-}
-
 /// Drum voices — rawValue matches the engine's AB_DRUM_* enum.
 enum DrumSound: Int, CaseIterable, Identifiable, Codable {
     case kick = 0, snare, hat, openHat, clap, tom, rim, perc
@@ -27,18 +20,21 @@ enum DrumSound: Int, CaseIterable, Identifiable, Codable {
 }
 
 /// A global instrument (one engine track). Shared by every pattern.
+/// Synth layers embed their full SynthPatch (self-contained projects);
+/// drum layers keep the parametric DrumSound enum.
 struct Layer: Identifiable, Codable {
     var id = UUID()
     var engineId: Int = -1
     var kind: TrackKind
-    var sound: Int
+    var sound: Int               // DrumSound raw value (drum layers only)
+    var patch: SynthPatch?       // synth layers only
     var muted: Bool = false
 
-    static func synth(_ preset: SynthPreset) -> Layer { Layer(kind: .synth, sound: preset.rawValue) }
+    static func synth(_ patch: SynthPatch) -> Layer { Layer(kind: .synth, sound: 0, patch: patch) }
     static func drum(_ sound: DrumSound) -> Layer { Layer(kind: .drum, sound: sound.rawValue) }
 
     var displayName: String {
-        kind == .synth ? (SynthPreset(rawValue: sound)?.name ?? "Synth")
+        kind == .synth ? (patch?.name ?? "Synth")
                        : (DrumSound(rawValue: sound)?.name ?? "Drum")
     }
     var melodyVelocity: Int { 105 }
@@ -84,7 +80,8 @@ struct Project: Codable {
 
     static func demo() -> Project {
         let kick = Layer.drum(.kick), snare = Layer.drum(.snare), hat = Layer.drum(.hat)
-        let bass = Layer.synth(.bass), lead = Layer.synth(.lead)
+        let bass = Layer.synth(PatchFactory.named("Deep Sub"))
+        let lead = Layer.synth(PatchFactory.named("Super Saw"))
         let layers = [kick, snare, hat, bass, lead]
 
         var a = PatternData(name: "A")

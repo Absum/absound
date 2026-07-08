@@ -12,6 +12,8 @@ struct PatternStudioView: View {
     @ObservedObject var transport: TransportController
     @State private var melodyMode: MelodyMode = .roll
     @State private var showSettings = false
+    @State private var showBrowser = false
+    @State private var showSoundLab = false
     @Environment(\.verticalSizeClass) private var vSize
 
     enum MelodyMode: String, CaseIterable { case roll = "Roll", play = "Play" }
@@ -31,12 +33,21 @@ struct PatternStudioView: View {
             }
         }
         .sheet(isPresented: $showSettings) { SettingsSheet(transport: transport) }
+        .sheet(isPresented: $showBrowser) {
+            PatchBrowserView(transport: transport) {
+                showBrowser = false
+                showSoundLab = true
+            }
+        }
+        .fullScreenCover(isPresented: $showSoundLab) { SoundLabView(transport: transport) }
         .onAppear {
             transport.onAppear()
             #if DEBUG
             let env = ProcessInfo.processInfo.environment
             if env["ABSOUND_TAB"] == "drums" { transport.selectDrums() }
             if env["ABSOUND_MELODY"] == "play" { melodyMode = .play }
+            if env["ABSOUND_SHOW"] == "browser" { showBrowser = true }
+            if env["ABSOUND_SHOW"] == "soundlab" { showSoundLab = true }
             if env["ABSOUND_AUTOPLAY"] != nil { transport.playPattern() }
             #endif
         }
@@ -85,9 +96,9 @@ struct PatternStudioView: View {
     @ViewBuilder private var contextualControls: some View {
         if melodicSelected, let layer = transport.selectedLayer {
             HStack(spacing: 8) {
-                Menu {
-                    ForEach(SynthPreset.allCases) { p in Button(p.name) { transport.setTrackSound(layer.id, sound: p.rawValue) } }
-                } label: { pill(transport.selectedPreset.name, icon: "waveform") }
+                Button { showBrowser = true } label: {
+                    pill(transport.selectedPatch?.name ?? "Sound", icon: "waveform")
+                }
                 Picker("", selection: $melodyMode) {
                     ForEach(MelodyMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
@@ -102,6 +113,9 @@ struct PatternStudioView: View {
 
     private func layerMenu(_ layer: Layer) -> some View {
         Menu {
+            Button { showSoundLab = true } label: { Label("Edit sound", systemImage: "slider.vertical.3") }
+            Button { showBrowser = true } label: { Label("Change sound", systemImage: "waveform") }
+            Divider()
             Button { transport.generateMelody() } label: { Label("Generate melody", systemImage: "sparkles") }
             Button { transport.showShadow.toggle() } label: {
                 Label(transport.showShadow ? "Hide other layers" : "Show other layers", systemImage: "square.stack.3d.up")
@@ -232,7 +246,15 @@ private struct LayerStrip: View {
                 }
                 chip("Drums", selected: transport.selection == .drums, muted: false, accent: Theme.teal) { transport.selectDrums() }
                 Menu {
-                    Menu("Add instrument") { ForEach(SynthPreset.allCases) { p in Button(p.name) { transport.addSynthLayer(p) } } }
+                    Menu("Add instrument") {
+                        ForEach(PatchCategory.allCases) { cat in
+                            Menu(cat.rawValue) {
+                                ForEach(PatchFactory.presets.filter { $0.category == cat }) { p in
+                                    Button(p.name) { transport.addSynthLayer(p) }
+                                }
+                            }
+                        }
+                    }
                     Menu("Add drum") { ForEach(DrumSound.allCases) { d in Button(d.name) { transport.addDrumLayer(d) } } }
                 } label: {
                     Image(systemName: "plus").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.frost)
