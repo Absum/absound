@@ -61,6 +61,13 @@ struct SynthPatch: Codable, Identifiable, Equatable {
     var pan: Float = 0
     var delaySend: Float = 0.15
     var reverbSend: Float = 0.12
+    // Insert FX chain. Optional so pre-FX saves decode (nil == empty chain).
+    var fx: [FXSlot]? = nil
+
+    var fxChain: [FXSlot] {
+        get { fx ?? [] }
+        set { fx = newValue.isEmpty ? nil : newValue }
+    }
 
     /// Bridge to the engine struct.
     func toAB() -> ABPatch {
@@ -99,6 +106,7 @@ enum PatchFactory {
             p.drive = 0.3; p.envAmount = 0.15; p.keyTrack = 0.1
             p.ampD = 0.25; p.ampS = 0.7; p.ampR = 0.08
             p.velAmount = 0.3; p.gain = 1.0; p.delaySend = 0; p.reverbSend = 0.02
+            p.fx = [FXSlot(type: .comp, p1: 0.4, p2: 5, p3: 0.1, p4: 1.3)]
             return p
         }(),
         {
@@ -109,6 +117,7 @@ enum PatchFactory {
             p.modD = 0.14; p.modS = 0.0
             p.glide = 0.06; p.velAmount = 0.7; p.gain = 0.85
             p.delaySend = 0.08; p.reverbSend = 0.04
+            p.fx = [FXSlot(type: .drive, p1: 0.65, p2: 0, p3: 0.55, p4: 1.0), FXSlot(type: .comp, p1: 0.3, p2: 6, p3: 0.12, p4: 1.3)]
             return p
         }(),
         {
@@ -118,6 +127,7 @@ enum PatchFactory {
             p.envAmount = 0.4; p.lfoTarget = 2; p.lfoShape = 0; p.lfoSync = 8; p.lfoDepth = 0.35
             p.ampD = 0.3; p.ampS = 0.6; p.ampR = 0.1
             p.gain = 0.85; p.delaySend = 0.04; p.reverbSend = 0.05
+            p.fx = [FXSlot(type: .wah, p1: 0.8, p2: 0.8, p3: 0.75, p4: 0.9), FXSlot(type: .drive, p1: 0.4, p2: 0, p3: 0.5, p4: 0.8)]
             return p
         }(),
     ]
@@ -132,6 +142,7 @@ enum PatchFactory {
             p.ampA = 0.006; p.ampD = 0.3; p.ampS = 0.7; p.ampR = 0.25
             p.lfoTarget = 1; p.lfoRateHz = 5.2; p.lfoDepth = 0.10
             p.delaySend = 0.3; p.reverbSend = 0.22
+            p.fx = [FXSlot(type: .chorus, p1: 0.5, p2: 0.7, p3: 0.45, p4: 0.15), FXSlot(type: .width, p1: 1.5, p2: 140, p3: 0, p4: 0)]
             return p
         }(),
         {
@@ -142,6 +153,7 @@ enum PatchFactory {
             p.ampA = 0.002; p.ampD = 0.12; p.ampS = 0.45; p.ampR = 0.12
             p.lfoTarget = 1; p.lfoRateHz = 6.5; p.lfoDepth = 0.22
             p.glide = 0.05; p.delaySend = 0.35; p.reverbSend = 0.15
+            p.fx = [FXSlot(type: .delay, p1: 8, p2: 0.55, p3: 0.55, p4: 0.4)]
             return p
         }(),
         {
@@ -172,6 +184,7 @@ enum PatchFactory {
             p.envAmount = 0.8; p.ampA = 0.002; p.ampD = 0.16; p.ampS = 0; p.ampR = 0.12
             p.modD = 0.11; p.modS = 0
             p.velAmount = 0.7; p.delaySend = 0.3; p.reverbSend = 0.2
+            p.fx = [FXSlot(type: .room, p1: 0.7, p2: 0.3, p3: 0.35, p4: 12)]
             return p
         }(),
         {
@@ -191,6 +204,7 @@ enum PatchFactory {
             p.envAmount = 0.7; p.ampA = 0.001; p.ampD = 0.1; p.ampS = 0; p.ampR = 0.08
             p.modD = 0.07; p.modS = 0
             p.velAmount = 0.6; p.delaySend = 0.4; p.reverbSend = 0.12
+            p.fx = [FXSlot(type: .crush, p1: 10, p2: 3, p3: 0.5, p4: 0), FXSlot(type: .delay, p1: 16, p2: 0.5, p3: 0.6, p4: 0.35)]
             return p
         }(),
     ]
@@ -226,6 +240,7 @@ enum PatchFactory {
             p.ampA = 0.9; p.ampD = 0.5; p.ampS = 0.9; p.ampR = 1.2
             p.lfoTarget = 4; p.lfoSync = 2; p.lfoDepth = 0.5
             p.velAmount = 0.1; p.gain = 0.65; p.delaySend = 0.2; p.reverbSend = 0.5
+            p.fx = [FXSlot(type: .phaser, p1: 0.25, p2: 0.9, p3: 0.5, p4: 0.8), FXSlot(type: .gate, p1: 16, p2: 5, p3: 0.85, p4: 8)]
             return p
         }(),
     ]
@@ -248,6 +263,7 @@ enum PatchFactory {
             p.envAmount = 0.35; p.ampA = 0.003; p.ampD = 0.5; p.ampS = 0.45; p.ampR = 0.4
             p.lfoTarget = 3; p.lfoRateHz = 5.5; p.lfoDepth = 0.15
             p.velAmount = 0.85; p.delaySend = 0.08; p.reverbSend = 0.22
+            p.fx = [FXSlot(type: .tremPan, p1: 8, p2: 0.5, p3: 0.2, p4: 1), FXSlot(type: .room, p1: 0.45, p2: 0.5, p3: 0.25, p4: 8)]
             return p
         }(),
         {

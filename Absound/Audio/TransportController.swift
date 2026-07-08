@@ -48,9 +48,17 @@ final class TransportController: ObservableObject {
         for i in p.layers.indices {
             let l = p.layers[i]
             p.layers[i].engineId = engine.addTrack(kind: l.kind.rawValue, sound: l.sound)
-            if let patch = l.patch { engine.setPatch(p.layers[i].engineId, patch.toAB()) }
+            if let patch = l.patch {
+                engine.setPatch(p.layers[i].engineId, patch.toAB())
+                engine.setFX(p.layers[i].engineId, patch.fxChain.toABChain())
+            }
             if l.muted { engine.setTrackMute(p.layers[i].engineId, muted: true) }
+            if l.kind == .drum, let s = l.drumStrip {
+                engine.setStrip(p.layers[i].engineId, gain: s.gain, pan: s.pan,
+                                delaySend: s.delaySend, reverbSend: s.reverbSend)
+            }
         }
+        engine.setMasterFX((p.masterFX ?? []).toABChain())
         project = p
         selection = p.layers.last(where: { $0.kind == .synth }).map { .track($0.id) } ?? .drums
         tempo = p.tempo
@@ -81,10 +89,18 @@ final class TransportController: ObservableObject {
         for i in newP.layers.indices {
             let l = newP.layers[i]
             newP.layers[i].engineId = engine.addTrack(kind: l.kind.rawValue, sound: l.sound)
-            if let patch = l.patch { engine.setPatch(newP.layers[i].engineId, patch.toAB()) }
+            if let patch = l.patch {
+                engine.setPatch(newP.layers[i].engineId, patch.toAB())
+                engine.setFX(newP.layers[i].engineId, patch.fxChain.toABChain())
+            }
             if l.muted { engine.setTrackMute(newP.layers[i].engineId, muted: true) }
+            if l.kind == .drum, let s = l.drumStrip {
+                engine.setStrip(newP.layers[i].engineId, gain: s.gain, pan: s.pan,
+                                delaySend: s.delaySend, reverbSend: s.reverbSend)
+            }
             newP.layers[i].soloed = false   // solo is session-state; never carried across loads
         }
+        engine.setMasterFX((newP.masterFX ?? []).toABChain())
         newP.currentPatternIndex = min(newP.currentPatternIndex, max(newP.patterns.count - 1, 0))
         project = newP
         selection = newP.layers.last(where: { $0.kind == .synth }).map { .track($0.id) } ?? .drums
@@ -107,6 +123,7 @@ final class TransportController: ObservableObject {
     func applyPreviewPatch(_ patch: SynthPatch) {
         guard previewEngineId >= 0 else { return }
         engine.setPatch(previewEngineId, patch.toAB())
+        engine.setFX(previewEngineId, patch.fxChain.toABChain())
     }
     func auditionPreview(row: Int) {
         guard previewEngineId >= 0 else { return }
@@ -169,6 +186,7 @@ final class TransportController: ObservableObject {
         l.engineId = engine.addTrack(kind: TrackKind.synth.rawValue, sound: 0)
         guard l.engineId >= 0 else { return }
         engine.setPatch(l.engineId, patch.toAB())
+        engine.setFX(l.engineId, patch.fxChain.toABChain())
         project.layers.append(l)
         selection = .track(l.id)
     }
@@ -178,6 +196,7 @@ final class TransportController: ObservableObject {
         guard let i = layerIndex(id), project.layers[i].kind == .synth else { return }
         project.layers[i].patch = patch
         engine.setPatch(project.layers[i].engineId, patch.toAB())
+        engine.setFX(project.layers[i].engineId, patch.fxChain.toABChain())
     }
     func addDrumLayer(_ sound: DrumSound) {
         var l = Layer.drum(sound)
@@ -197,6 +216,27 @@ final class TransportController: ObservableObject {
         guard let i = layerIndex(id) else { return }
         project.layers[i].muted.toggle()
         engine.setTrackMute(project.layers[i].engineId, muted: project.layers[i].muted)
+    }
+
+    // MARK: - Mixer
+
+    var masterChain: [FXSlot] {
+        get { project.masterChain }
+        set {
+            project.masterChain = newValue
+            engine.setMasterFX(newValue.toABChain())
+        }
+    }
+
+    func drumStrip(_ id: UUID) -> StripValues {
+        layer(id)?.drumStrip ?? StripValues()
+    }
+
+    func setDrumStrip(_ id: UUID, _ strip: StripValues) {
+        guard let i = layerIndex(id), project.layers[i].kind == .drum else { return }
+        project.layers[i].drumStrip = strip
+        engine.setStrip(project.layers[i].engineId, gain: strip.gain, pan: strip.pan,
+                        delaySend: strip.delaySend, reverbSend: strip.reverbSend)
     }
 
     func toggleSolo(_ id: UUID) {

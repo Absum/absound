@@ -12,6 +12,14 @@ import Foundation
 
 enum TrackKind: Int, Codable { case synth = 0, drum = 1 }
 
+/// Channel-strip values for tracks without a patch (drums).
+struct StripValues: Codable, Equatable {
+    var gain: Float = 0.85
+    var pan: Float = 0
+    var delaySend: Float = 0.10
+    var reverbSend: Float = 0.12
+}
+
 /// Drum voices — rawValue matches the engine's AB_DRUM_* enum.
 enum DrumSound: Int, CaseIterable, Identifiable, Codable {
     case kick = 0, snare, hat, openHat, clap, tom, rim, perc
@@ -30,10 +38,11 @@ struct Layer: Identifiable, Codable {
     var patch: SynthPatch?       // synth layers only
     var muted: Bool = false
     var soloed: Bool = false     // transient mixing state — not persisted
+    var drumStrip: StripValues?  // drum layers only (synth strip lives in the patch)
 
     // engineId is a live handle; persisting it would route edits to wrong slots
     // after a reload. Solo is deliberately session-only (mute persists).
-    enum CodingKeys: String, CodingKey { case id, kind, sound, patch, muted }
+    enum CodingKeys: String, CodingKey { case id, kind, sound, patch, muted, drumStrip }
 
     static func synth(_ patch: SynthPatch) -> Layer { Layer(kind: .synth, sound: 0, patch: patch) }
     static func drum(_ sound: DrumSound) -> Layer { Layer(kind: .drum, sound: sound.rawValue) }
@@ -79,6 +88,12 @@ struct Project: Codable, Identifiable {
     var patterns: [PatternData]
     var song: [Int]                  // indices into `patterns`
     var currentPatternIndex: Int     // which pattern the Studio edits
+    var masterFX: [FXSlot]? = nil    // master-bus insert chain (nil == empty)
+
+    var masterChain: [FXSlot] {
+        get { masterFX ?? [] }
+        set { masterFX = newValue.isEmpty ? nil : newValue }
+    }
 
     var context: MusicalContext {
         MusicalContext(root: contextRoot,
@@ -87,7 +102,7 @@ struct Project: Codable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, contextRoot, scaleRaw, baseOctave, tempo, layers, patterns, song, currentPatternIndex
+        case id, name, contextRoot, scaleRaw, baseOctave, tempo, layers, patterns, song, currentPatternIndex, masterFX
     }
 
     init(id: UUID = UUID(), name: String = "My Song", contextRoot: Int, scaleRaw: String,
@@ -113,6 +128,7 @@ struct Project: Codable, Identifiable {
         patterns = try c.decode([PatternData].self, forKey: .patterns)
         song = try c.decode([Int].self, forKey: .song)
         currentPatternIndex = try c.decode(Int.self, forKey: .currentPatternIndex)
+        masterFX = try c.decodeIfPresent([FXSlot].self, forKey: .masterFX)
     }
 
     static func demo() -> Project {

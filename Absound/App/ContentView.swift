@@ -24,9 +24,9 @@ struct ContentView: View {
             SongArrangerView(transport: transport)
                 .tag(2)
                 .tabItem { Label("Song", systemImage: "rectangle.stack.fill") }
-            ComingSoon(title: "Settings")
+            MixView(transport: transport)
                 .tag(3)
-                .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
+                .tabItem { Label("Mix", systemImage: "slider.horizontal.3") }
         }
         .tint(Theme.teal)
         .preferredColorScheme(.dark)
@@ -40,21 +40,10 @@ struct ContentView: View {
             switch ProcessInfo.processInfo.environment["ABSOUND_START_TAB"] {
             case "sounds": selection = 1
             case "song": selection = 2
+            case "mix": selection = 3
             default: break
             }
             #endif
-        }
-    }
-}
-
-private struct ComingSoon: View {
-    let title: String
-    var body: some View {
-        ZStack {
-            ArcticBackground()
-            Text(title)
-                .font(Theme.display(34))
-                .foregroundStyle(Theme.frost.opacity(0.7))
         }
     }
 }

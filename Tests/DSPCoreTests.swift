@@ -263,6 +263,111 @@ final class DSPCoreTests: XCTestCase {
         XCTAssertTrue(m.finite, "emptying the song mid-play must not crash or corrupt")
     }
 
+    // MARK: - Insert FX (FX1)
+
+    private func sustainedSynth(_ core: OpaquePointer?) -> Int {
+        let t = addTrack(core, kind: AB_KIND_SYNTH, sound: AB_SYNTH_KEYS)
+        var p = ABPatch(); ab_patch_init(&p)
+        p.ampS = 1.0; p.ampD = 0.01; p.unison = 5; p.unisonDetune = 20; p.unisonWidth = 1.0
+        p.delaySend = 0; p.reverbSend = 0
+        ab_core_set_patch(core, Int32(t), &p)
+        settle(core)
+        return t
+    }
+
+    func testFXEmptyChainIsTransparent() {
+        // Two identical cores; one gets an explicit empty chain. Output must match exactly
+        // (the engine is deterministic).
+        let a = ab_core_create(sr), b = ab_core_create(sr)
+        defer { ab_core_destroy(a); ab_core_destroy(b) }
+        for core in [a, b] {
+            let t = addTrack(core, kind: AB_KIND_SYNTH, sound: AB_SYNTH_PLUCK)
+            setStep(core, t, 0, 60, 100)
+            if core == b {
+                var chain = ABFXChain(); ab_fx_chain_init(&chain)
+                ab_core_set_fx(core, Int32(t), &chain)
+            }
+            ab_core_set_playing(core, 1)
+        }
+        var la = [Float](repeating: 0, count: 512), ra = la, lb = la, rb = la
+        var maxDiff: Float = 0
+        for _ in 0..<40 {
+            ab_core_render(a, &la, &ra, 512)
+            ab_core_render(b, &lb, &rb, 512)
+            for i in 0..<512 { maxDiff = max(maxDiff, abs(la[i] - lb[i])) }
+        }
+        XCTAssertLessThan(maxDiff, 1e-6, "an empty chain must be bit-transparent")
+    }
+
+    func testDriveAddsHarmonics() {
+        let core = ab_core_create(sr); defer { ab_core_destroy(core) }
+        let t = sustainedSynth(core)
+        // Relative harmonic content (HF energy / RMS) is gain-staging independent.
+        func hfRatio() -> Double {
+            _ = renderMetrics(core, seconds: 0.8)   // flush previous tails
+            ab_core_note_on(core, Int32(t), 48, 1.0)
+            var l = [Float](repeating: 0, count: block), r = l
+            var prev: Float = 0, hfSum = 0.0, sqSum = 0.0, n = 0
+            for _ in 0..<25 {
+                ab_core_render(core, &l, &r, Int32(block))
+                for i in 0..<block {
+                    let d = Double(l[i] - prev); prev = l[i]
+                    hfSum += d * d; sqSum += Double(l[i]) * Double(l[i]); n += 1
+                }
+            }
+            return (hfSum / max(sqSum, 1e-12)).squareRoot()
+        }
+        let clean = hfRatio()
+        var chain = ABFXChain(); ab_fx_chain_init(&chain)
+        chain.slots.0 = ABFXSlot(type: Int32(AB_FX_DRIVE), enabled: 1, p1: 0.9, p2: 0, p3: 0.9, p4: 1.0)
+        ab_core_set_fx(core, Int32(t), &chain)
+        settle(core)
+        let driven = hfRatio()
+        XCTAssertGreaterThan(driven, clean * 1.15, "drive must add relative harmonic (HF) content")
+    }
+
+    func testMasterGateCreatesSilenceWindows() {
+        let core = ab_core_create(sr); defer { ab_core_destroy(core) }
+        ab_core_set_tempo(core, 120)
+        let t = sustainedSynth(core)
+        for s in 0..<16 { setStep(core, t, s, 60, 110) }   // constant retrigger = sustained source
+        var chain = ABFXChain(); ab_fx_chain_init(&chain)
+        chain.slots.0 = ABFXSlot(type: Int32(AB_FX_GATE), enabled: 1, p1: 16, p2: 3, p3: 1.0, p4: 2)
+        ab_core_set_master_fx(core, &chain)   // pattern 3 = one hit per beat, mostly closed
+        ab_core_set_playing(core, 1)
+        _ = renderMetrics(core, seconds: 0.5)  // let it settle
+        // 25 ms windows over 1s: the gate must produce near-silent windows AND loud ones.
+        var l = [Float](repeating: 0, count: block), r = l
+        var lo = Double.greatestFiniteMagnitude, hi = 0.0
+        let win = Int(0.025 * sr); var acc = 0.0, cnt = 0
+        for _ in 0..<Int(1.0 * sr / Double(block)) {
+            ab_core_render(core, &l, &r, Int32(block))
+            for i in 0..<block {
+                acc += Double(l[i] * l[i]); cnt += 1
+                if cnt == win {
+                    let rms = (acc / Double(win)).squareRoot()
+                    lo = min(lo, rms); hi = max(hi, rms)
+                    acc = 0; cnt = 0
+                }
+            }
+        }
+        XCTAssertGreaterThan(hi, 0.02, "gate must pass audio in open cells")
+        XCTAssertLessThan(lo, hi * 0.1, "gate must chop near-silence into a sustained source (master chain active)")
+    }
+
+    func testDrumStripGainSilences() {
+        let core = ab_core_create(sr); defer { ab_core_destroy(core) }
+        let k = addTrack(core, kind: AB_KIND_DRUM, sound: AB_DRUM_KICK)
+        for s in 0..<16 { setStep(core, k, s, 0, 120) }
+        ab_core_set_playing(core, 1)
+        let loud = renderMetrics(core, seconds: 0.5)
+        XCTAssertGreaterThan(loud.peak, 0.05)
+        ab_core_set_track_strip(core, Int32(k), 0.0, 0.0, 0.0, 0.0)   // fader down
+        _ = renderMetrics(core, seconds: 2.0)   // smoother + delay/reverb tails settle
+        let silent = renderMetrics(core, seconds: 0.5)
+        XCTAssertLessThan(silent.peak, 0.01, "drum strip gain must control drum tracks")
+    }
+
     func testSequencerAdvancesAtTempo() {
         let core = ab_core_create(sr); defer { ab_core_destroy(core) }
         ab_core_set_tempo(core, 120)

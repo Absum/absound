@@ -102,6 +102,36 @@ typedef struct ABPatch {
 /* Fill a patch with sane defaults (a plain single-osc pluck). */
 void ab_patch_init(ABPatch *out);
 
+/* ---------------------------------------------------------------------------
+ * Insert effect chains — up to AB_MAX_FX ordered slots per track, plus one
+ * chain on the master bus. Each slot is a generic (type, enabled, p1..p4);
+ * the Swift layer maps named parameters per type. Staged like patches.
+ * ------------------------------------------------------------------------- */
+enum {
+    AB_FX_NONE = 0,
+    AB_FX_DRIVE = 1,     /* p1 amount, p2 mode (0 soft/1 hard/2 fold), p3 tone 0..1, p4 mix */
+    AB_FX_CRUSH = 2,     /* p1 bits 2..16, p2 downsample 1..40, p3 mix */
+    AB_FX_CHORUS = 3,    /* p1 rate Hz, p2 depth 0..1, p3 mix, p4 feedback 0..0.9 */
+    AB_FX_PHASER = 4,    /* p1 rate Hz, p2 depth, p3 feedback, p4 mix */
+    AB_FX_EQ = 5,        /* p1 low dB -12..12, p2 mid dB, p3 high dB, p4 mid Hz 200..5000 */
+    AB_FX_COMP = 6,      /* p1 threshold 0..1, p2 ratio 1..20, p3 release s, p4 makeup 0..2 */
+    AB_FX_TREMPAN = 7,   /* p1 rate (sync div, 0=free 5Hz), p2 depth, p3 shape, p4 mode 0 trem/1 pan */
+    AB_FX_WIDTH = 8,     /* p1 width 0..2, p2 bass-mono Hz 0..500 */
+    AB_FX_DELAY = 9,     /* p1 sync div (2,4,8=1/2,1/4,1/8; 0=1/4), p2 feedback, p3 tone, p4 mix */
+    AB_FX_RINGMOD = 10,  /* p1 carrier Hz 20..4000, p2 mix, p3 tone */
+    AB_FX_GATE = 11,     /* p1 rate div, p2 pattern 0..7, p3 depth, p4 attack ms 1..50 */
+    AB_FX_WAH = 12,      /* p1 sensitivity, p2 range 0..1, p3 resonance, p4 mix */
+    AB_FX_ROOM = 13,     /* p1 size 0..1, p2 damp, p3 mix, p4 predelay ms 0..50 */
+    AB_FX_TYPE_COUNT = 14
+};
+enum { AB_MAX_FX = 4 };
+
+typedef struct ABFXSlot { int type; int enabled; float p1, p2, p3, p4; } ABFXSlot;
+typedef struct ABFXChain { ABFXSlot slots[AB_MAX_FX]; } ABFXChain;
+
+/* All slots empty + enabled. */
+void ab_fx_chain_init(ABFXChain *out);
+
 /* Lifecycle. */
 ABAudioCore *ab_core_create(double sampleRate);
 void ab_core_destroy(ABAudioCore *core);
@@ -133,6 +163,15 @@ void ab_core_set_track_solo(ABAudioCore *core, int track, int soloed);
 /* Apply a full synth patch to a track (synth tracks only; ignored for drums).
  * Staged and swapped in on the audio thread at the next control block. */
 void ab_core_set_patch(ABAudioCore *core, int track, const ABPatch *patch);
+
+/* Insert FX chain for a track (any kind) / for the master bus. Staged. */
+void ab_core_set_fx(ABAudioCore *core, int track, const ABFXChain *chain);
+void ab_core_set_master_fx(ABAudioCore *core, const ABFXChain *chain);
+
+/* Channel strip for any track kind: gain 0..1.5, pan -1..1, sends 0..1.
+ * (Applying a synth patch also writes these from its own fields; last wins.) */
+void ab_core_set_track_strip(ABAudioCore *core, int track,
+                             float gain, float pan, float delaySend, float reverbSend);
 
 /* Pattern editing. velocity 0 clears the step; 1..127 enables it. For drum tracks
  * midiNote is ignored. */

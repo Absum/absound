@@ -472,6 +472,396 @@ inline float softClip(float x) {
     return x - (x * x * x) * (1.0f / 6.75f);
 }
 
+// ============================ Insert FX =====================================
+
+// RBJ biquad (EQ shelves/peak).
+struct BQ {
+    float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    inline float run(float x) {
+        float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        x2 = x1; x1 = x; y2 = y1; y1 = flushDenorm(y);
+        return y1;
+    }
+    void reset() { x1 = x2 = y1 = y2 = 0; }
+    void lowShelf(float sr, float f, float dB) {
+        float A = std::pow(10.0f, dB / 40.0f), w = 2.0f * (float)kPi * f / sr;
+        float cw = std::cos(w), sw = std::sin(w), b = sw / 2.0f * std::sqrt((A + 1 / A) * (1 / 0.9f - 1) + 2);
+        float a0 = (A + 1) + (A - 1) * cw + 2 * std::sqrt(A) * b;
+        b0 = (A * ((A + 1) - (A - 1) * cw + 2 * std::sqrt(A) * b)) / a0;
+        b1 = (2 * A * ((A - 1) - (A + 1) * cw)) / a0;
+        b2 = (A * ((A + 1) - (A - 1) * cw - 2 * std::sqrt(A) * b)) / a0;
+        a1 = (-2 * ((A - 1) + (A + 1) * cw)) / a0;
+        a2 = ((A + 1) + (A - 1) * cw - 2 * std::sqrt(A) * b) / a0;
+    }
+    void highShelf(float sr, float f, float dB) {
+        float A = std::pow(10.0f, dB / 40.0f), w = 2.0f * (float)kPi * f / sr;
+        float cw = std::cos(w), sw = std::sin(w), b = sw / 2.0f * std::sqrt((A + 1 / A) * (1 / 0.9f - 1) + 2);
+        float a0 = (A + 1) - (A - 1) * cw + 2 * std::sqrt(A) * b;
+        b0 = (A * ((A + 1) + (A - 1) * cw + 2 * std::sqrt(A) * b)) / a0;
+        b1 = (-2 * A * ((A - 1) + (A + 1) * cw)) / a0;
+        b2 = (A * ((A + 1) + (A - 1) * cw - 2 * std::sqrt(A) * b)) / a0;
+        a1 = (2 * ((A - 1) - (A + 1) * cw)) / a0;
+        a2 = ((A + 1) - (A - 1) * cw - 2 * std::sqrt(A) * b) / a0;
+    }
+    void peak(float sr, float f, float dB, float q) {
+        float A = std::pow(10.0f, dB / 40.0f), w = 2.0f * (float)kPi * f / sr;
+        float cw = std::cos(w), alpha = std::sin(w) / (2 * q);
+        float a0 = 1 + alpha / A;
+        b0 = (1 + alpha * A) / a0; b1 = (-2 * cw) / a0; b2 = (1 - alpha * A) / a0;
+        a1 = (-2 * cw) / a0; a2 = (1 - alpha / A) / a0;
+    }
+};
+
+/* Long delay line owned per chain (one AB_FX_DELAY per chain uses it). ~0.8 s. */
+struct LongDelay {
+    static constexpr int kMax = 35280;
+    float L[kMax], R[kMax];
+    int w = 0;
+    void clear() { std::memset(L, 0, sizeof(L)); std::memset(R, 0, sizeof(R)); w = 0; }
+};
+
+/* Trance-gate 16-cell patterns. */
+static const uint16_t kGatePatterns[8] = {
+    0b1010101010101010, 0b1100110011001100, 0b1110111011101110, 0b1000100010001000,
+    0b1111000011110000, 0b1011101010111010, 0b1111111100000000, 0b1101101101101101
+};
+
+/* Tempo-sync division -> seconds per cycle: div N means 4/N beats. */
+inline double syncSeconds(double bpm, float div, double fallback) {
+    if (div < 0.5f) return fallback;
+    return (60.0 / bpm) * (4.0 / div);
+}
+
+struct FXProc {
+    int type = AB_FX_NONE;
+    bool enabled = true;
+    float p1 = 0, p2 = 0, p3 = 0, p4 = 0;
+    float declick = 1.0f;                 // ramps 0->1 after a type switch
+
+    // Shared state.
+    double ph = 0;                        // LFO / carrier phase
+    float env = 0;                        // envelope follower
+    float apL[4] = {0}, apR[4] = {0};     // phaser allpasses
+    float lpL = 0, lpR = 0, lp2L = 0, lp2R = 0;
+    float holdL = 0, holdR = 0; int holdN = 0;
+    BQ eqL[3], eqR[3]; int eqFresh = 1;
+    SVF svfL, svfR;
+    // Small modulated delay (chorus) / room reverb storage.
+    static constexpr int kBuf = 8192;
+    float bufL[kBuf], bufR[kBuf];
+    int w = 0;
+    // Room partitions of buf: 4 combs + 1 allpass per channel.
+    int cIdx[8] = {0}; float cStore[8] = {0}; int aIdx[2] = {0};
+
+    void reset(float sr) {
+        ph = 0; env = 0; declick = 0.0f;
+        std::memset(apL, 0, sizeof(apL)); std::memset(apR, 0, sizeof(apR));
+        lpL = lpR = lp2L = lp2R = 0; holdL = holdR = 0; holdN = 0;
+        for (auto &b : eqL) b.reset(); for (auto &b : eqR) b.reset();
+        eqFresh = 1;
+        svfL.setSampleRate(sr); svfR.setSampleRate(sr); svfL.reset(); svfR.reset();
+        std::memset(bufL, 0, sizeof(bufL)); std::memset(bufR, 0, sizeof(bufR));
+        w = 0;
+        std::memset(cIdx, 0, sizeof(cIdx)); std::memset(cStore, 0, sizeof(cStore));
+        std::memset(aIdx, 0, sizeof(aIdx));
+    }
+
+    inline void process(float &l, float &r, float sr, double bpm, LongDelay *ld) {
+        if (type == AB_FX_NONE || !enabled) return;
+        if (declick < 1.0f) declick = std::fmin(1.0f, declick + 1.0f / (0.002f * sr));
+        const float dl = l, dr = r;   // dry for mixing
+        float wetMixOverride = -1.0f; // effects that manage their own mix set output directly
+
+        switch (type) {
+            case AB_FX_DRIVE: {
+                float amt = 1.0f + clampf(p1, 0, 1) * 12.0f;
+                auto shape = [&](float x) -> float {
+                    x *= amt;
+                    int mode = (int)p2;
+                    if (mode == 1) { x = clampf(x, -1, 1); }                    // hard
+                    else if (mode == 2) {                                       // foldback
+                        while (x > 1 || x < -1) x = (x > 1) ? 2 - x : -2 - x;
+                    } else { x = std::tanh(x); }                                // soft
+                    return x / std::sqrt(amt);
+                };
+                float wl = shape(l), wr = shape(r);
+                float tone = clampf(p3, 0, 1);
+                float coef = 0.05f + tone * 0.9f;   // brighter with p3
+                lpL += coef * (wl - lpL); lpR += coef * (wr - lpR);
+                wl = lpL; wr = lpR;
+                float mix = clampf(p4, 0, 1);
+                l = dl + (wl - dl) * mix; r = dr + (wr - dr) * mix;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_CRUSH: {
+                float bits = clampf(p1 < 2 ? 8 : p1, 2, 16);
+                float levels = std::pow(2.0f, bits) * 0.5f;
+                int ds = (int)clampf(p2 < 1 ? 1 : p2, 1, 40);
+                if (--holdN <= 0) {
+                    holdN = ds;
+                    holdL = std::round(l * levels) / levels;
+                    holdR = std::round(r * levels) / levels;
+                }
+                float mix = clampf(p3, 0, 1);
+                l = dl + (holdL - dl) * mix; r = dr + (holdR - dr) * mix;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_CHORUS: {
+                double rate = p1 <= 0 ? 0.6 : p1;
+                ph += rate / sr; if (ph >= 1) ph -= 1;
+                float depth = clampf(p2, 0, 1);
+                float base = 0.012f * sr, sweep = 0.006f * sr * depth;
+                float dA = base + sweep * (0.5f + 0.5f * std::sin(ph * kTwoPi));
+                float dB = base + sweep * (0.5f + 0.5f * std::sin(ph * kTwoPi + 2.1));
+                float fb = clampf(p4, 0, 0.9f);
+                int iA = w - (int)dA; if (iA < 0) iA += kBuf;
+                int iB = w - (int)dB; if (iB < 0) iB += kBuf;
+                float tapL = bufL[iA], tapR = bufR[iB];
+                bufL[w] = flushDenorm(l + tapL * fb);
+                bufR[w] = flushDenorm(r + tapR * fb);
+                if (++w >= kBuf) w = 0;
+                float mix = clampf(p3, 0, 1);
+                l = dl * (1 - mix * 0.3f) + tapL * mix;
+                r = dr * (1 - mix * 0.3f) + tapR * mix;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_PHASER: {
+                double rate = p1 <= 0 ? 0.4 : p1;
+                ph += rate / sr; if (ph >= 1) ph -= 1;
+                float depth = clampf(p2, 0, 1);
+                float f = 300.0f + (0.5f + 0.5f * (float)std::sin(ph * kTwoPi)) * 2200.0f * depth + 100.0f;
+                float c = (std::tan((float)kPi * f / sr) - 1) / (std::tan((float)kPi * f / sr) + 1);
+                float fb = clampf(p3, 0, 0.7f);
+                // lp2L/lp2R double as the phaser's feedback memory (last wet output).
+                float inL = l + lp2L * fb, inR = r + lp2R * fb;
+                for (int s = 0; s < 4; ++s) {
+                    float yl = c * inL + apL[s]; apL[s] = flushDenorm(inL - c * yl); inL = yl;
+                    float yr = c * inR + apR[s]; apR[s] = flushDenorm(inR - c * yr); inR = yr;
+                }
+                lp2L = flushDenorm(clampf(inL, -2.0f, 2.0f));
+                lp2R = flushDenorm(clampf(inR, -2.0f, 2.0f));
+                float mix = clampf(p4, 0, 1);
+                l = dl + (inL - dl) * mix * 0.7f; r = dr + (inR - dr) * mix * 0.7f;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_EQ: {
+                if (eqFresh) {
+                    eqFresh = 0;
+                    float midF = clampf(p4 < 100 ? 1000 : p4, 200, 5000);
+                    eqL[0].lowShelf(sr, 200, clampf(p1, -12, 12));  eqR[0] = eqL[0]; eqR[0].reset();
+                    eqL[1].peak(sr, midF, clampf(p2, -12, 12), 0.9f); eqR[1] = eqL[1]; eqR[1].reset();
+                    eqL[2].highShelf(sr, 4000, clampf(p3, -12, 12)); eqR[2] = eqL[2]; eqR[2].reset();
+                }
+                for (int s = 0; s < 3; ++s) { l = eqL[s].run(l); r = eqR[s].run(r); }
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_COMP: {
+                float in = std::fmax(std::fabs(l), std::fabs(r));
+                float att = 1.0f - std::exp(-1.0f / (0.001f * sr));
+                float rel = 1.0f - std::exp(-1.0f / (std::fmax(p3, 0.02f) * sr));
+                env += (in > env ? att : rel) * (in - env);
+                float thr = clampf(p1 <= 0 ? 0.3f : p1, 0.02f, 1.0f);
+                float ratio = clampf(p2 < 1 ? 4 : p2, 1, 20);
+                float g = 1.0f;
+                if (env > thr) g = std::pow(thr / env, 1.0f - 1.0f / ratio);
+                float makeup = p4 <= 0 ? 1.0f : clampf(p4, 0.5f, 2.0f);
+                l *= g * makeup; r *= g * makeup;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_TREMPAN: {
+                double rate = (p1 >= 0.5f) ? 1.0 / syncSeconds(bpm, p1, 0.2) : 5.0;
+                ph += rate / sr; if (ph >= 1) ph -= 1;
+                float shape = clampf(p3, 0, 1);
+                float lfoS = (float)std::sin(ph * kTwoPi);
+                float lfoQ = lfoS >= 0 ? 1.0f : -1.0f;
+                float lfo = lfoS + (lfoQ - lfoS) * shape;   // sine -> square morph
+                float depth = clampf(p2, 0, 1);
+                if ((int)p4 == 1) {                          // auto-pan
+                    float pan = lfo * depth;
+                    float a = (pan + 1.0f) * 0.25f * (float)kPi;
+                    l = dl * std::cos(a) * 1.41421356f;
+                    r = dr * std::sin(a) * 1.41421356f;
+                } else {                                     // tremolo
+                    float g = 1.0f - depth * (0.5f + 0.5f * lfo);
+                    l *= g; r *= g;
+                }
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_WIDTH: {
+                float width = clampf(p1 < 0 ? 1 : p1, 0, 2);
+                float mid = (l + r) * 0.5f, side = (l - r) * 0.5f;
+                // Bass-mono: low-pass the side channel's low end away.
+                float f = clampf(p2, 0, 500);
+                if (f > 10) {
+                    float coef = 1.0f - std::exp(-2.0f * (float)kPi * f / sr);
+                    lpL += coef * (side - lpL);            // low part of side
+                    side -= lpL;                           // remove lows from side
+                }
+                side *= width;
+                l = mid + side; r = mid - side;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_DELAY: {
+                if (!ld) break;
+                double secs = syncSeconds(bpm, p1 < 0.5f ? 4.0f : p1, 0.3);
+                int n = (int)clampf((float)(secs * sr), 32, (float)(LongDelay::kMax - 1));
+                int idx = ld->w - n; if (idx < 0) idx += LongDelay::kMax;
+                float tl = ld->L[idx], tr = ld->R[idx];
+                float tone = clampf(p3 <= 0 ? 0.5f : p3, 0, 1);
+                float coef = 0.05f + tone * 0.9f;
+                lpL += coef * (tl - lpL); lpR += coef * (tr - lpR);
+                float fb = clampf(p2, 0, 0.85f);
+                ld->L[ld->w] = flushDenorm(l + lpR * fb);   // ping-pong
+                ld->R[ld->w] = flushDenorm(r + lpL * fb);
+                if (++ld->w >= LongDelay::kMax) ld->w = 0;
+                float mix = clampf(p4 <= 0 ? 0.35f : p4, 0, 1);
+                l = dl + lpL * mix; r = dr + lpR * mix;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_RINGMOD: {
+                double f = clampf(p1 <= 0 ? 220 : p1, 20, 4000);
+                ph += f / sr; if (ph >= 1) ph -= 1;
+                float car = (float)std::sin(ph * kTwoPi);
+                float wl = l * car, wr = r * car;
+                float tone = clampf(p3 <= 0 ? 0.8f : p3, 0, 1);
+                float coef = 0.05f + tone * 0.9f;
+                lpL += coef * (wl - lpL); lpR += coef * (wr - lpR);
+                float mix = clampf(p2, 0, 1);
+                l = dl + (lpL - dl) * mix; r = dr + (lpR - dr) * mix;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_GATE: {
+                double cellsPerSec = (bpm / 60.0) * ((p1 >= 0.5f ? p1 : 16.0f) / 4.0);
+                ph += cellsPerSec / sr; if (ph >= 16.0) ph -= 16.0;
+                int cell = (int)ph & 15;
+                int pat = (int)clampf(p2, 0, 7);
+                bool open = (kGatePatterns[pat] >> (15 - cell)) & 1;
+                float attMs = clampf(p4 <= 0 ? 4 : p4, 1, 50);
+                float slew = 1.0f - std::exp(-1.0f / (attMs * 0.001f * sr));
+                float target = open ? 1.0f : 1.0f - clampf(p3 <= 0 ? 1 : p3, 0, 1);
+                env += slew * (target - env);
+                l *= env; r *= env;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_WAH: {
+                float in = std::fmax(std::fabs(l), std::fabs(r));
+                float att = 1.0f - std::exp(-1.0f / (0.005f * sr));
+                float rel = 1.0f - std::exp(-1.0f / (0.10f * sr));
+                env += (in > env ? att : rel) * (in - env);
+                float sens = clampf(p1 <= 0 ? 0.7f : p1, 0, 1);
+                float range = clampf(p2 <= 0 ? 0.7f : p2, 0, 1);
+                float f = 250.0f + clampf(env * sens * 8.0f, 0, 1) * 2800.0f * range;
+                float res = clampf(p3 <= 0 ? 0.7f : p3, 0, 0.95f);
+                svfL.set(f, res); svfR.set(f, res);
+                float wl = svfL.process(l, AB_FILTER_BP) * 1.5f;
+                float wr = svfR.process(r, AB_FILTER_BP) * 1.5f;
+                float mix = clampf(p4 <= 0 ? 0.8f : p4, 0, 1);
+                l = dl + (wl - dl) * mix; r = dr + (wr - dr) * mix;
+                wetMixOverride = 1;
+                break;
+            }
+            case AB_FX_ROOM: {
+                float size = clampf(p1 <= 0 ? 0.5f : p1, 0, 1);
+                float damp = clampf(p2, 0, 0.95f);
+                int preN = (int)(clampf(p4, 0, 50) * 0.001f * sr);
+                // Comb lengths scale with size; partition buf per channel.
+                static const int base[4] = {1116, 1188, 1277, 1356};
+                float in = (l + r) * 0.5f * 0.4f;
+                float outWl = 0, outWr = 0;
+                for (int cIx = 0; cIx < 4; ++cIx) {
+                    int len = (int)(base[cIx] * (0.55f + 0.45f * size));
+                    int offL = cIx * 1500, offR = cIx * 1500;   // L in bufL, R in bufR
+                    int lenR = len + 23;
+                    // L comb
+                    float yl = bufL[offL + cIdx[cIx]];
+                    cStore[cIx] = flushDenorm(yl * (1 - damp) + cStore[cIx] * damp);
+                    bufL[offL + cIdx[cIx]] = in + cStore[cIx] * (0.72f + 0.2f * size);
+                    if (++cIdx[cIx] >= len) cIdx[cIx] = 0;
+                    outWl += yl;
+                    // R comb
+                    float yr = bufR[offR + cIdx[4 + cIx]];
+                    cStore[4 + cIx] = flushDenorm(yr * (1 - damp) + cStore[4 + cIx] * damp);
+                    bufR[offR + cIdx[4 + cIx]] = in + cStore[4 + cIx] * (0.72f + 0.2f * size);
+                    if (++cIdx[4 + cIx] >= lenR) cIdx[4 + cIx] = 0;
+                    outWr += yr;
+                }
+                // One allpass per channel in the tail region of the buffers.
+                {
+                    int len = 556, off = 6200;
+                    float y = bufL[off + aIdx[0]]; float o = -outWl + y;
+                    bufL[off + aIdx[0]] = flushDenorm(outWl + y * 0.5f);
+                    if (++aIdx[0] >= len) aIdx[0] = 0; outWl = o;
+                    int lenR = 579;
+                    float y2 = bufR[off + aIdx[1]]; float o2 = -outWr + y2;
+                    bufR[off + aIdx[1]] = flushDenorm(outWr + y2 * 0.5f);
+                    if (++aIdx[1] >= lenR) aIdx[1] = 0; outWr = o2;
+                }
+                (void)preN;
+                float mix = clampf(p3 <= 0 ? 0.3f : p3, 0, 1);
+                l = dl + outWl * mix; r = dr + outWr * mix;
+                wetMixOverride = 1;
+                break;
+            }
+            default: break;
+        }
+        (void)wetMixOverride;
+        // Declick: crossfade dry->processed after a type switch.
+        if (declick < 1.0f) {
+            l = dl + (l - dl) * declick;
+            r = dr + (r - dr) * declick;
+        }
+        l = sanitize(l); r = sanitize(r);
+    }
+};
+
+/* A chain of FX slots + its staged mailbox + the shared long delay line. */
+struct FXChainProc {
+    FXProc slots[AB_MAX_FX];
+    LongDelay longDelay;
+    ABFXChain staged;
+    std::atomic<int> dirty{0};
+
+    void init() {
+        longDelay.clear();
+        std::memset(&staged, 0, sizeof(staged));
+        for (auto &s : staged.slots) s.enabled = 1;
+    }
+    // Audio-thread: swap staged params in; reset state on type change.
+    void applyStaged(float sr) {
+        for (int i = 0; i < AB_MAX_FX; ++i) {
+            const ABFXSlot &in = staged.slots[i];
+            FXProc &fx = slots[i];
+            int newType = (in.type >= 0 && in.type < AB_FX_TYPE_COUNT) ? in.type : AB_FX_NONE;
+            if (newType != fx.type) { fx.type = newType; fx.reset(sr); }
+            if (fx.type == AB_FX_EQ &&
+                (fx.p1 != in.p1 || fx.p2 != in.p2 || fx.p3 != in.p3 || fx.p4 != in.p4)) {
+                fx.eqFresh = 1;   // recompute biquad coefficients
+            }
+            fx.enabled = in.enabled != 0;
+            fx.p1 = in.p1; fx.p2 = in.p2; fx.p3 = in.p3; fx.p4 = in.p4;
+        }
+    }
+    inline void process(float &l, float &r, float sr, double bpm) {
+        LongDelay *ld = &longDelay;   // first Delay slot in the chain gets it
+        for (auto &fx : slots) {
+            if (fx.type == AB_FX_NONE || !fx.enabled) continue;
+            fx.process(l, r, sr, bpm, fx.type == AB_FX_DELAY ? ld : nullptr);
+            if (fx.type == AB_FX_DELAY) ld = nullptr;
+        }
+    }
+};
+
 struct StepData { int16_t note; float vel; };
 
 // ---- Built-in default patches (S1 bridge; Swift takes over in S2) -----------
@@ -541,8 +931,14 @@ struct Track {
     DrumVoice drum;
     StepData steps[AB_MAX_PATTERNS][AB_NUM_STEPS];
 
-    // Channel strip smoothers (audio-thread owned).
+    // Channel strip smoothers (audio-thread owned) + send levels.
     Smooth gainS, panS;
+    float dSendV = 0.10f, rSendV = 0.12f;
+    // Strip mailbox (gain, pan, dSend, rSend) — used by the mixer for all kinds.
+    float stripStaged[4] = {0.85f, 0.0f, 0.10f, 0.12f};
+    std::atomic<int> stripDirty{0};
+    // Insert FX chain.
+    FXChainProc fx;
     double lastNote = -1.0;   // for glide
 
     void init(float sr) {
@@ -551,6 +947,8 @@ struct Track {
         defaultPatch(AB_SYNTH_PLUCK, cfg.p);
         cfg.recompute();
         gainS.snap(cfg.p.gain); panS.snap(cfg.p.pan);
+        fx.init();
+        for (auto &s : fx.slots) s.reset(sr);
         clearAllPatterns();
     }
     void clearAllPatterns() {
@@ -575,11 +973,19 @@ struct Track {
             cfg.recompute();
             gainS.target = clampf(cfg.p.gain, 0.0f, 1.5f);
             panS.target = clampf(cfg.p.pan, -1.0f, 1.0f);
+            dSendV = clampf(cfg.p.delaySend, 0.0f, 1.0f);
+            rSendV = clampf(cfg.p.reverbSend, 0.0f, 1.0f);
             // Re-apply envelope rates to voices not currently sounding.
             for (auto &v : synth) if (!v.busy) v.applyEnvelopes(cfg.p);
         }
+        if (stripDirty.exchange(0, std::memory_order_acq_rel)) {
+            gainS.target = clampf(stripStaged[0], 0.0f, 1.5f);
+            panS.target = clampf(stripStaged[1], -1.0f, 1.0f);
+            dSendV = clampf(stripStaged[2], 0.0f, 1.0f);
+            rSendV = clampf(stripStaged[3], 0.0f, 1.0f);
+        }
+        if (fx.dirty.exchange(0, std::memory_order_acq_rel)) fx.applyStaged(static_cast<float>(sr));
         gainS.tick(0.2f); panS.tick(0.2f);
-        (void)sr;
     }
 };
 
@@ -590,6 +996,7 @@ struct ABAudioCore {
     double sr = 44100.0;
     Track tracks[AB_MAX_TRACKS];
     Delay delay; Reverb reverb;
+    FXChainProc masterFx;
     std::atomic<int> soloCount{0};
 
     std::atomic<double> bpm{112.0};
@@ -653,6 +1060,8 @@ ABAudioCore *ab_core_create(double sampleRate) {
     for (auto &t : c->tracks) { t.active.store(false); t.muted.store(false); t.init(static_cast<float>(c->sr)); }
     c->delay.init(c->sr, 112.0);
     c->reverb.init();
+    c->masterFx.init();
+    for (auto &s : c->masterFx.slots) s.reset(static_cast<float>(c->sr));
     c->recomputeStepLen();
     return c;
 }
@@ -719,15 +1128,24 @@ int ab_core_add_track(ABAudioCore *core, int kind, int sound) {
         t.drum.hardReset();
         t.lastNote = -1.0;
         t.resetRequest.store(false, std::memory_order_relaxed);
+        // Fresh FX chain + strip for the slot (safe: track is inactive).
+        t.fx.init();
+        for (auto &s : t.fx.slots) { s.type = AB_FX_NONE; s.reset(static_cast<float>(core->sr)); }
+        t.fx.dirty.store(0, std::memory_order_relaxed);
+        t.stripDirty.store(0, std::memory_order_relaxed);
         if (t.kind == AB_KIND_DRUM) {
             t.drumSound = sound;
             t.drum.setType(sound, static_cast<float>(core->sr));
+            t.gainS.snap(0.85f); t.panS.snap(0.0f);
+            t.dSendV = 0.10f; t.rSendV = 0.12f;
         } else {
             defaultPatch(sound, t.staged);
             t.cfg.p = t.staged;
             t.cfg.recompute();
             t.gainS.snap(clampf(t.cfg.p.gain, 0.0f, 1.5f));
             t.panS.snap(clampf(t.cfg.p.pan, -1.0f, 1.0f));
+            t.dSendV = clampf(t.cfg.p.delaySend, 0.0f, 1.0f);
+            t.rSendV = clampf(t.cfg.p.reverbSend, 0.0f, 1.0f);
             t.patchDirty.store(0, std::memory_order_relaxed);
         }
         t.active.store(true, std::memory_order_release);
@@ -767,6 +1185,33 @@ void ab_core_set_patch(ABAudioCore *core, int track, const ABPatch *patch) {
     if (t.kind != AB_KIND_SYNTH) return;
     t.staged = *patch;
     t.patchDirty.store(1, std::memory_order_release);
+}
+
+void ab_fx_chain_init(ABFXChain *out) {
+    if (!out) return;
+    std::memset(out, 0, sizeof(*out));
+    for (auto &s : out->slots) s.enabled = 1;
+}
+
+void ab_core_set_fx(ABAudioCore *core, int track, const ABFXChain *chain) {
+    if (!core || !chain || track < 0 || track >= AB_MAX_TRACKS) return;
+    core->tracks[track].fx.staged = *chain;
+    core->tracks[track].fx.dirty.store(1, std::memory_order_release);
+}
+
+void ab_core_set_master_fx(ABAudioCore *core, const ABFXChain *chain) {
+    if (!core || !chain) return;
+    core->masterFx.staged = *chain;
+    core->masterFx.dirty.store(1, std::memory_order_release);
+}
+
+void ab_core_set_track_strip(ABAudioCore *core, int track,
+                             float gain, float pan, float delaySend, float reverbSend) {
+    if (!core || track < 0 || track >= AB_MAX_TRACKS) return;
+    Track &t = core->tracks[track];
+    t.stripStaged[0] = gain; t.stripStaged[1] = pan;
+    t.stripStaged[2] = delaySend; t.stripStaged[3] = reverbSend;
+    t.stripDirty.store(1, std::memory_order_release);
 }
 
 void ab_core_set_track_mute(ABAudioCore *core, int track, int muted) {
@@ -833,12 +1278,14 @@ void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
             }
         }
 
-        // Control-rate maintenance for all tracks.
+        // Control-rate maintenance for all tracks + master chain.
         if (core->ctrlCountdown-- <= 0) {
             core->ctrlCountdown = kCtrlBlock - 1;
             for (auto &t : core->tracks) {
                 if (t.active.load(std::memory_order_acquire)) t.controlTick(core->sr);
             }
+            if (core->masterFx.dirty.exchange(0, std::memory_order_acq_rel))
+                core->masterFx.applyStaged(static_cast<float>(core->sr));
         }
 
         float dryL = 0, dryR = 0, dSendL = 0, dSendR = 0, rSendL = 0, rSendR = 0;
@@ -855,21 +1302,22 @@ void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
                 float m = t.drum.render();
                 tl = m; tr = m;
             }
+            // Insert FX chain (pre-fader).
+            t.fx.process(tl, tr, static_cast<float>(core->sr), bpm);
             // Channel strip: smoothed gain + equal-power pan (center = unity).
             float g = t.gainS.v;
             float pa = (t.panS.v + 1.0f) * 0.25f * static_cast<float>(kPi);
             tl *= g * std::cos(pa) * 1.41421356f;
             tr *= g * std::sin(pa) * 1.41421356f;
             dryL += tl; dryR += tr;
-            float ds = t.kind == AB_KIND_SYNTH ? t.cfg.p.delaySend : 0.10f;
-            float rs = t.kind == AB_KIND_SYNTH ? t.cfg.p.reverbSend : 0.12f;
-            dSendL += tl * ds; dSendR += tr * ds;
-            rSendL += tl * rs; rSendR += tr * rs;
+            dSendL += tl * t.dSendV; dSendR += tr * t.dSendV;
+            rSendL += tl * t.rSendV; rSendR += tr * t.rSendV;
         }
 
         float outL = dryL, outR = dryR;
         core->delay.process(dSendL, dSendR, outL, outR);
         core->reverb.process(rSendL, rSendR, outL, outR);
+        core->masterFx.process(outL, outR, static_cast<float>(core->sr), bpm);
 
         left[i] = softClip(sanitize(outL) * 0.7f);
         right[i] = softClip(sanitize(outR) * 0.7f);
@@ -879,6 +1327,6 @@ void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
         core->uiPos.store(core->curStep + core->stepAccum / core->samplesPerStep, std::memory_order_relaxed);
 }
 
-const char *ab_core_version(void) { return "Absound DSP 0.4.0 (engine v2 — stereo patches)"; }
+const char *ab_core_version(void) { return "Absound DSP 0.5.0 (engine v2 + insert FX)"; }
 
 } // extern "C"

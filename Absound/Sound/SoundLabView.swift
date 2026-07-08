@@ -65,11 +65,17 @@ struct SoundLabView: View {
                             if mode == .simple {
                                 simpleHeaderViz
                                 MacroPanel(patch: patch)
+                                LabSection(title: "EFFECTS") {
+                                    FXChainSummary(chain: current.fxChain)
+                                    Text("Edit the chain in Advanced")
+                                        .font(Theme.light(10)).foregroundStyle(Theme.frost.opacity(0.3))
+                                }
                             } else {
                                 oscSection
                                 filterSection
                                 envSection
                                 modSection
+                                fxSection
                                 outSection
                             }
                         }
@@ -235,6 +241,15 @@ struct SoundLabView: View {
                 ArcticKnob("Glide", value: patch.glide, range: 0...0.5, format: "%.2fs")
                 ArcticKnob("Vel", value: patch.velAmount, range: 0...1)
             }
+        }
+    }
+
+    private var fxSection: some View {
+        LabSection(title: "EFFECTS") {
+            FXChainView(chain: Binding(
+                get: { patch.wrappedValue.fxChain },
+                set: { var p = patch.wrappedValue; p.fxChain = $0; patch.wrappedValue = p }
+            ))
         }
     }
 

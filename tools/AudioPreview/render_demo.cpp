@@ -65,7 +65,39 @@ int main(int argc, char **argv) {
     ab_core_set_tempo(core, 112);
     std::vector<float> L, R;
 
-    if (std::strcmp(mode, "preset") == 0 && argc > 3) {
+    if (std::strcmp(mode, "fx") == 0 && argc > 3) {
+        // One effect at showcase settings on a sustained riff:  fx <type 1..13> <out> [secs]
+        int type = std::atoi(argv[2]);
+        const char *out = argv[3];
+        double seconds = argc > 4 ? std::atof(argv[4]) : 6.0;
+
+        int t = ab_core_add_track(core, AB_KIND_SYNTH, AB_SYNTH_KEYS);
+        const int riff[][3] = {{0, 48, 112}, {4, 55, 104}, {8, 60, 112}, {12, 55, 100}};
+        for (auto &n : riff) ab_core_set_step(core, t, 0, n[0], n[1], n[2]);
+
+        ABFXChain chain; ab_fx_chain_init(&chain);
+        chain.slots[0].type = type;
+        switch (type) {   // showcase params
+            case AB_FX_DRIVE: chain.slots[0] = {type, 1, 0.8f, 0, 0.6f, 1.0f}; break;
+            case AB_FX_CRUSH: chain.slots[0] = {type, 1, 6, 8, 1.0f, 0}; break;
+            case AB_FX_CHORUS: chain.slots[0] = {type, 1, 0.8f, 0.8f, 0.7f, 0.2f}; break;
+            case AB_FX_PHASER: chain.slots[0] = {type, 1, 0.5f, 0.9f, 0.6f, 0.9f}; break;
+            case AB_FX_EQ: chain.slots[0] = {type, 1, -12, 6, 8, 1200}; break;
+            case AB_FX_COMP: chain.slots[0] = {type, 1, 0.15f, 8, 0.15f, 1.5f}; break;
+            case AB_FX_TREMPAN: chain.slots[0] = {type, 1, 8, 1.0f, 0.7f, 0}; break;
+            case AB_FX_WIDTH: chain.slots[0] = {type, 1, 2.0f, 120, 0, 0}; break;
+            case AB_FX_DELAY: chain.slots[0] = {type, 1, 8, 0.6f, 0.6f, 0.6f}; break;
+            case AB_FX_RINGMOD: chain.slots[0] = {type, 1, 330, 0.8f, 0.8f, 0}; break;
+            case AB_FX_GATE: chain.slots[0] = {type, 1, 16, 4, 1.0f, 3}; break;
+            case AB_FX_WAH: chain.slots[0] = {type, 1, 0.9f, 0.9f, 0.8f, 1.0f}; break;
+            case AB_FX_ROOM: chain.slots[0] = {type, 1, 0.9f, 0.3f, 0.6f, 10}; break;
+            default: break;
+        }
+        ab_core_set_fx(core, t, &chain);
+        ab_core_set_playing(core, 1);
+        renderTo(core, seconds, sr, L, R);
+        writeWav(out, L, R, sr);
+    } else if (std::strcmp(mode, "preset") == 0 && argc > 3) {
         // Solo preset audition: a melodic riff on one synth track, pattern 0.
         int preset = std::atoi(argv[2]);
         const char *out = argv[3];
