@@ -8,8 +8,12 @@ import SwiftUI
 
 struct PatchBrowserView: View {
     @ObservedObject var transport: TransportController
+    @EnvironmentObject var library: PatchLibrary
     var openSoundLab: () -> Void
     @Environment(\.dismiss) private var dismiss
+
+    @State private var renameTarget: SynthPatch?
+    @State private var newName = ""
 
     private let columns = [GridItem(.adaptive(minimum: 104), spacing: 10)]
 
@@ -19,6 +23,7 @@ struct PatchBrowserView: View {
                 Theme.bgGradient.ignoresSafeArea()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
+                        mySounds
                         ForEach(PatchCategory.allCases) { cat in
                             let patches = PatchFactory.presets.filter { $0.category == cat }
                             VStack(alignment: .leading, spacing: 8) {
@@ -33,6 +38,17 @@ struct PatchBrowserView: View {
                     }
                     .padding(16)
                 }
+            }
+            .alert("Rename sound", isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )) {
+                TextField("Name", text: $newName)
+                Button("Rename") {
+                    if let t = renameTarget { library.rename(t.id, to: newName) }
+                    renameTarget = nil
+                }
+                Button("Cancel", role: .cancel) { renameTarget = nil }
             }
             .navigationTitle("Sounds")
             .navigationBarTitleDisplayMode(.inline)
@@ -49,8 +65,33 @@ struct PatchBrowserView: View {
         .preferredColorScheme(.dark)
     }
 
+    @ViewBuilder private var mySounds: some View {
+        if !library.userPatches.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("My Sounds", systemImage: "person.fill")
+                    .font(Theme.title(15))
+                    .foregroundStyle(Theme.cyan)
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(library.userPatches) { p in
+                        card(p)
+                            .contextMenu {
+                                Button { newName = p.name; renameTarget = p } label: {
+                                    Label("Rename", systemImage: "pencil")
+                                }
+                                Button(role: .destructive) { library.delete(p.id) } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                    }
+                }
+                Text("Hold a sound to rename or delete")
+                    .font(Theme.light(10)).foregroundStyle(Theme.frost.opacity(0.35))
+            }
+        }
+    }
+
     private func card(_ p: SynthPatch) -> some View {
-        let isCurrent = transport.selectedPatch?.name == p.name
+        let isCurrent = transport.selectedPatch?.id == p.id
         return Button {
             if let id = transport.selectedLayerId {
                 transport.applyPatch(id, patch: p)

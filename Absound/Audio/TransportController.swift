@@ -228,22 +228,28 @@ final class TransportController: ObservableObject {
     }
 
     /// Basic in-scale melody generator (placeholder for the future smart generator).
-    /// A gentle random walk over scale degrees with some rests, anchored near the root.
+    /// A gentle random walk over scale degrees with rests, anchored to chord tones
+    /// on strong beats. Freshly seeded per call, so every tap rerolls a new idea.
     func generateMelody() {
         guard let l = selectedLayer, l.kind == .synth else { return }
         let maxRow = melodyRowCount - 1
-        var seed = UInt64(0x9E3779B9 ^ (UInt64(editIndex) << 8) ^ UInt64(l.engineId & 0xFF))
+        var seed = UInt64.random(in: UInt64.min...UInt64.max) | 1
         func rnd(_ n: Int) -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int((seed >> 33) % UInt64(max(n, 1))) }
 
-        var row = min(maxRow, project.context.scale.degreeCount) // start around the octave root
+        let degrees = project.context.scale.degreeCount
+        // Chord-tone rows (root and the ~fifth degree) in each visible octave.
+        let fifthDegree = min(degrees - 1, 4)
+        let anchors = [0, fifthDegree, degrees, degrees + fifthDegree, 2 * degrees].filter { $0 <= maxRow }
+
+        var row = degrees // start at the middle-octave root
         var lane = [Int?](repeating: nil, count: stepCount)
         for s in 0..<stepCount {
             // Rest on some off-beats for phrasing.
             if s % 2 == 1 && rnd(100) < 45 { continue }
             let stepMove = [-2, -1, -1, 0, 1, 1, 2][rnd(7)]
             row = min(maxRow, max(0, row + stepMove))
-            // Land on the root/fifth on strong beats for a musical feel.
-            if s % 8 == 0 { row = min(maxRow, (row / project.context.scale.degreeCount) * project.context.scale.degreeCount) }
+            // Land on a nearby chord tone (root/fifth) on strong beats.
+            if s % 8 == 0, let anchor = anchors.min(by: { abs($0 - row) < abs($1 - row) }) { row = anchor }
             lane[s] = row
         }
         project.patterns[editIndex].melodies[l.id] = lane

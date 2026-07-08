@@ -9,6 +9,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var selection = 0
     @StateObject private var transport = TransportController()
+    @StateObject private var patchLibrary = PatchLibrary()
 
     var body: some View {
         TabView(selection: $selection) {
@@ -24,6 +25,7 @@ struct ContentView: View {
         }
         .tint(Theme.teal)
         .preferredColorScheme(.dark)
+        .environmentObject(patchLibrary)
         .onAppear {
             #if DEBUG
             if ProcessInfo.processInfo.environment["ABSOUND_START_TAB"] == "song" { selection = 1 }
