@@ -173,6 +173,12 @@ void ab_core_set_master_fx(ABAudioCore *core, const ABFXChain *chain);
 void ab_core_set_track_strip(ABAudioCore *core, int track,
                              float gain, float pan, float delaySend, float reverbSend);
 
+/* Metering: decaying stereo peak levels for the UI (poll at display rate).
+ * Track level is post-fader; master level is post-chain but PRE-soft-clip,
+ * so values above 1.0 mean the mix is overdriving into the limiter. */
+float ab_core_track_level(ABAudioCore *core, int track);
+float ab_core_master_level(ABAudioCore *core);
+
 /* Pattern editing. velocity 0 clears the step; 1..127 enables it. For drum tracks
  * midiNote is ignored. */
 void ab_core_set_step(ABAudioCore *core, int track, int pattern, int step, int midiNote, int velocity);

@@ -939,6 +939,9 @@ struct Track {
     std::atomic<int> stripDirty{0};
     // Insert FX chain.
     FXChainProc fx;
+    // Metering: per-sample peak accumulator (audio thread) -> published atomic.
+    float meterAcc = 0.0f;
+    std::atomic<float> meter{0.0f};
     double lastNote = -1.0;   // for glide
 
     void init(float sr) {
@@ -986,6 +989,10 @@ struct Track {
         }
         if (fx.dirty.exchange(0, std::memory_order_acq_rel)) fx.applyStaged(static_cast<float>(sr));
         gainS.tick(0.2f); panS.tick(0.2f);
+        // Publish the metering peak with a slow decay (~halves per second).
+        float prev = meter.load(std::memory_order_relaxed);
+        meter.store(std::fmax(meterAcc, prev * 0.9995f), std::memory_order_relaxed);
+        meterAcc = 0.0f;
     }
 };
 
@@ -997,6 +1004,8 @@ struct ABAudioCore {
     Track tracks[AB_MAX_TRACKS];
     Delay delay; Reverb reverb;
     FXChainProc masterFx;
+    float masterMeterAcc = 0.0f;
+    std::atomic<float> masterMeter{0.0f};
     std::atomic<int> soloCount{0};
 
     std::atomic<double> bpm{112.0};
@@ -1286,6 +1295,9 @@ void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
             }
             if (core->masterFx.dirty.exchange(0, std::memory_order_acq_rel))
                 core->masterFx.applyStaged(static_cast<float>(core->sr));
+            float prev = core->masterMeter.load(std::memory_order_relaxed);
+            core->masterMeter.store(std::fmax(core->masterMeterAcc, prev * 0.9995f), std::memory_order_relaxed);
+            core->masterMeterAcc = 0.0f;
         }
 
         float dryL = 0, dryR = 0, dSendL = 0, dSendR = 0, rSendL = 0, rSendR = 0;
@@ -1309,6 +1321,7 @@ void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
             float pa = (t.panS.v + 1.0f) * 0.25f * static_cast<float>(kPi);
             tl *= g * std::cos(pa) * 1.41421356f;
             tr *= g * std::sin(pa) * 1.41421356f;
+            t.meterAcc = std::fmax(t.meterAcc, std::fmax(std::fabs(tl), std::fabs(tr)));
             dryL += tl; dryR += tr;
             dSendL += tl * t.dSendV; dSendR += tr * t.dSendV;
             rSendL += tl * t.rSendV; rSendR += tr * t.rSendV;
@@ -1319,14 +1332,28 @@ void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
         core->reverb.process(rSendL, rSendR, outL, outR);
         core->masterFx.process(outL, outR, static_cast<float>(core->sr), bpm);
 
-        left[i] = softClip(sanitize(outL) * 0.7f);
-        right[i] = softClip(sanitize(outR) * 0.7f);
+        // Meter the master post-chain, PRE-soft-clip (in output-gain terms), so
+        // readings above 1.0 mean the mix is overdriving into the limiter.
+        float mL = sanitize(outL) * 0.7f, mR = sanitize(outR) * 0.7f;
+        core->masterMeterAcc = std::fmax(core->masterMeterAcc, std::fmax(std::fabs(mL), std::fabs(mR)));
+
+        left[i] = softClip(mL);
+        right[i] = softClip(mR);
     }
 
     if (isPlaying && core->samplesPerStep > 0.0)
         core->uiPos.store(core->curStep + core->stepAccum / core->samplesPerStep, std::memory_order_relaxed);
 }
 
-const char *ab_core_version(void) { return "Absound DSP 0.5.0 (engine v2 + insert FX)"; }
+float ab_core_track_level(ABAudioCore *core, int track) {
+    if (!core || track < 0 || track >= AB_MAX_TRACKS) return 0.0f;
+    return core->tracks[track].meter.load(std::memory_order_relaxed);
+}
+
+float ab_core_master_level(ABAudioCore *core) {
+    return core ? core->masterMeter.load(std::memory_order_relaxed) : 0.0f;
+}
+
+const char *ab_core_version(void) { return "Absound DSP 0.5.1 (engine v2 + insert FX + metering)"; }
 
 } // extern "C"

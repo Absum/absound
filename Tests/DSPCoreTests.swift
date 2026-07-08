@@ -368,6 +368,22 @@ final class DSPCoreTests: XCTestCase {
         XCTAssertLessThan(silent.peak, 0.01, "drum strip gain must control drum tracks")
     }
 
+    func testMetersFollowSignalAndDecay() {
+        let core = ab_core_create(sr); defer { ab_core_destroy(core) }
+        let k = addTrack(core, kind: AB_KIND_DRUM, sound: AB_DRUM_KICK)
+        for s in 0..<16 { setStep(core, k, s, 0, 120) }
+        ab_core_set_playing(core, 1)
+        _ = renderMetrics(core, seconds: 0.5)
+        let hotTrack = ab_core_track_level(core, Int32(k))
+        let hotMaster = ab_core_master_level(core)
+        XCTAssertGreaterThan(hotTrack, 0.05, "track meter must follow its signal")
+        XCTAssertGreaterThan(hotMaster, 0.05, "master meter must follow the mix")
+        ab_core_set_playing(core, 0)
+        _ = renderMetrics(core, seconds: 4.0)   // decay window
+        XCTAssertLessThan(ab_core_track_level(core, Int32(k)), hotTrack * 0.5,
+                          "meters must decay after the signal stops")
+    }
+
     func testSequencerAdvancesAtTempo() {
         let core = ab_core_create(sr); defer { ab_core_destroy(core) }
         ab_core_set_tempo(core, 120)

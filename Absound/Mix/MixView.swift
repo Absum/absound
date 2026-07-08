@@ -8,6 +8,55 @@
 
 import SwiftUI
 
+/// Horizontal dB-mapped peak meter: green → yellow (−6 dB) → red (over 0 dBFS).
+/// `level` is linear post-fader peak; > 1.0 means overdriving into the limiter.
+struct MeterBar: View {
+    let level: Float
+    var height: CGFloat = 6
+
+    /// Map linear level to 0..1 across a −40 dB…+6 dB window.
+    private var norm: CGFloat {
+        guard level > 0.0001 else { return 0 }
+        let db = 20 * log10(Double(level))
+        return CGFloat(min(max((db + 40) / 46, 0), 1))
+    }
+    private var zeroDbNorm: CGFloat { 40.0 / 46.0 }
+    private var clipping: Bool { level > 1.0 }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: height / 2).fill(Color.black.opacity(0.35))
+                RoundedRectangle(cornerRadius: height / 2)
+                    .fill(LinearGradient(
+                        stops: [
+                            .init(color: Theme.teal, location: 0),
+                            .init(color: Theme.teal, location: 0.6),
+                            .init(color: .yellow, location: zeroDbNorm - 0.08),
+                            .init(color: .red, location: zeroDbNorm),
+                            .init(color: .red, location: 1),
+                        ],
+                        startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(geo.size.width * norm, 0))
+                    .animation(.linear(duration: 0.05), value: norm)
+                // 0 dBFS tick.
+                Rectangle().fill(Theme.frost.opacity(0.5))
+                    .frame(width: 1)
+                    .offset(x: geo.size.width * zeroDbNorm)
+                // Clip lamp.
+                if clipping {
+                    HStack {
+                        Spacer()
+                        Circle().fill(Color.red).frame(width: height, height: height)
+                            .shadow(color: .red, radius: 3)
+                    }
+                }
+            }
+        }
+        .frame(height: height)
+    }
+}
+
 struct MixView: View {
     @ObservedObject var transport: TransportController
 
@@ -45,20 +94,24 @@ struct MixView: View {
             chainSheet(title: "Master",
                        chain: Binding(get: { transport.masterChain }, set: { transport.masterChain = $0 }))
         }
-        .onAppear { transport.onAppear() }
+        .onAppear { transport.onAppear(); transport.metersEnabled = true }
+        .onDisappear { transport.metersEnabled = false }
     }
 
     // MARK: - Strips
 
     private var masterStrip: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "crown.fill").font(.system(size: 13)).foregroundStyle(Theme.teal)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("MASTER").font(Theme.title(15)).foregroundStyle(Theme.frost).tracking(1)
-                FXChainSummary(chain: transport.masterChain)
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "crown.fill").font(.system(size: 13)).foregroundStyle(Theme.teal)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("MASTER").font(Theme.title(15)).foregroundStyle(Theme.frost).tracking(1)
+                    FXChainSummary(chain: transport.masterChain)
+                }
+                Spacer()
+                Button { showMasterChain = true } label: { fxButton }
             }
-            Spacer()
-            Button { showMasterChain = true } label: { fxButton }
+            MeterBar(level: transport.masterLevel, height: 10)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 14).fill(Theme.teal.opacity(0.10)))
@@ -87,6 +140,7 @@ struct MixView: View {
                 knob("Delay", get: { dSend(layer) }, set: { setDSend(layer, $0) }, range: 0...1)
                 knob("Reverb", get: { rSend(layer) }, set: { setRSend(layer, $0) }, range: 0...1)
             }
+            MeterBar(level: transport.meterLevels[layer.id] ?? 0, height: 6)
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 14).fill(Color.white.opacity(0.05)))

@@ -94,6 +94,8 @@ final class AudioEngine {
     func setStrip(_ engineId: Int, gain: Float, pan: Float, delaySend: Float, reverbSend: Float) {
         ab_core_set_track_strip(core, Int32(engineId), gain, pan, delaySend, reverbSend)
     }
+    func trackLevel(_ engineId: Int) -> Float { ab_core_track_level(core, Int32(engineId)) }
+    var masterLevel: Float { ab_core_master_level(core) }
     func setTrackMute(_ engineId: Int, muted: Bool) { ab_core_set_track_mute(core, Int32(engineId), muted ? 1 : 0) }
     func setTrackSolo(_ engineId: Int, soloed: Bool) { ab_core_set_track_solo(core, Int32(engineId), soloed ? 1 : 0) }
     func clearTrack(_ engineId: Int, pattern: Int) { ab_core_clear_track(core, Int32(engineId), Int32(pattern)) }

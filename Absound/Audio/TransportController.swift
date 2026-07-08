@@ -29,6 +29,15 @@ final class TransportController: ObservableObject {
     @Published private(set) var songPosition = -1
     @Published var isRecording = false
     @Published var showShadow = true
+    // Metering (polled only while the Mix tab is visible).
+    @Published private(set) var meterLevels: [UUID: Float] = [:]
+    @Published private(set) var masterLevel: Float = 0
+    var metersEnabled = false {
+        didSet {
+            if metersEnabled { startPolling() }
+            else if !isPlaying { stopPolling(); meterLevels = [:]; masterLevel = 0 }
+        }
+    }
     @Published private(set) var project: Project
     @Published var selection: Selection
 
@@ -489,5 +498,11 @@ final class TransportController: ObservableObject {
         if p != currentPattern { currentPattern = p }
         let sp = engine.songPosition
         if sp != songPosition { songPosition = sp }
+        if metersEnabled {
+            var levels: [UUID: Float] = [:]
+            for l in project.layers { levels[l.id] = engine.trackLevel(l.engineId) }
+            meterLevels = levels
+            masterLevel = engine.masterLevel
+        }
     }
 }

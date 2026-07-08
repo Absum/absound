@@ -37,12 +37,14 @@ struct ContentView: View {
         }
         .onAppear {
             #if DEBUG
-            switch ProcessInfo.processInfo.environment["ABSOUND_START_TAB"] {
+            let env = ProcessInfo.processInfo.environment
+            switch env["ABSOUND_START_TAB"] {
             case "sounds": selection = 1
             case "song": selection = 2
             case "mix": selection = 3
             default: break
             }
+            if env["ABSOUND_AUTOPLAY"] != nil { transport.playPattern() }
             #endif
         }
     }

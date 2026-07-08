@@ -9,11 +9,19 @@ import SwiftUI
 
 struct FXChainView: View {
     @Binding var chain: [FXSlot]
+    @State private var draggedSlot: UUID?
 
     var body: some View {
         VStack(spacing: 10) {
             ForEach(Array(chain.enumerated()), id: \.element.id) { idx, slot in
                 slotCard(idx: idx, slot: slot)
+                    .opacity(draggedSlot == slot.id ? 0.4 : 1)
+                    .onDrag {
+                        draggedSlot = slot.id
+                        return NSItemProvider(object: slot.id.uuidString as NSString)
+                    }
+                    .onDrop(of: [.text], delegate: FXReorderDelegate(
+                        item: slot.id, chain: $chain, dragged: $draggedSlot))
             }
             if chain.count < Int(AB_MAX_FX) {
                 Menu {
@@ -114,4 +122,22 @@ struct FXChainSummary: View {
 
 private extension Array {
     subscript(safeIndex i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
+/// Live-reorders the chain as a dragged slot card hovers over another.
+private struct FXReorderDelegate: DropDelegate {
+    let item: UUID
+    @Binding var chain: [FXSlot]
+    @Binding var dragged: UUID?
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged, dragged != item,
+              let from = chain.firstIndex(where: { $0.id == dragged }),
+              let to = chain.firstIndex(where: { $0.id == item }) else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            chain.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        }
+    }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+    func performDrop(info: DropInfo) -> Bool { dragged = nil; return true }
 }
