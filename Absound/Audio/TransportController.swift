@@ -463,7 +463,8 @@ final class TransportController: ObservableObject {
     }
     func placeMelody(row: Int, step: Int) {
         beginStroke()
-        guard let l = selectedLayer, l.kind == .synth else { return }
+        guard let l = selectedLayer, l.kind == .synth,
+              (0..<melodyRowCount).contains(row), (0..<stepCount).contains(step) else { return }
         var lane = project.patterns[editIndex].melody(l.id)
         guard lane[step] != row else { return }   // already there (paint dedupe)
         lane[step] = row

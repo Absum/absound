@@ -33,8 +33,15 @@ struct AuroraHighwayView: View {
             padStrip
         }
         // The 60fps playhead stream only runs while the Highway is visible.
-        .onAppear { transport.playheadEnabled = true }
+        .onAppear {
+            transport.playheadEnabled = true
+            octaveBase = min(octaveBase, maxBase)
+        }
         .onDisappear { transport.playheadEnabled = false }
+        // Scale changes shrink/grow the row space — keep the pads inside it.
+        .onChange(of: transport.melodyRowCount) { _, _ in
+            octaveBase = min(octaveBase, maxBase)
+        }
     }
 
     // MARK: Controls (Rec arm + octave shift)
