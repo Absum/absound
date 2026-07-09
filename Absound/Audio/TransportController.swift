@@ -369,6 +369,110 @@ final class TransportController: ObservableObject {
         engine.setStep(track: l.engineId, pattern: editIndex, step: step, note: 0, velocity: on ? l.drumVelocity : 0)
     }
 
+    // MARK: - ✨ Spark: generate a complete idea
+
+    /// Does the current pattern contain anything a Spark would replace?
+    var patternHasContent: Bool {
+        let p = project.patterns[editIndex]
+        return p.melodies.values.contains { $0.contains { $0 != nil } }
+            || p.drums.values.contains { $0.contains(true) }
+    }
+
+    /// The founding feature, promoted: one tap generates a complete idea in the
+    /// current key — a drum groove, a bassline anchored on the root, and
+    /// melodies — across every layer. Freshly seeded per call: reroll forever.
+    func sparkIdea() {
+        var seed = UInt64.random(in: UInt64.min...UInt64.max) | 1
+        func rnd(_ n: Int) -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int((seed >> 33) % UInt64(max(n, 1))) }
+
+        for l in project.layers {
+            if l.kind == .drum {
+                writeDrumLane(l, sparkDrumLane(sound: DrumSound(rawValue: l.sound) ?? .perc, rnd: rnd))
+            } else {
+                writeMelodyLane(l, sparkMelodicLane(category: l.patch?.category ?? .lead, rnd: rnd))
+            }
+        }
+    }
+
+    /// Genre-flavored groove templates with per-roll variation.
+    private func sparkDrumLane(sound: DrumSound, rnd: (Int) -> Int) -> [Bool] {
+        var lane = [Bool](repeating: false, count: stepCount)
+        func put(_ steps: [Int]) { for s in steps where s < stepCount { lane[s] = true } }
+        switch sound {
+        case .kick:
+            put([0, 4, 8, 12])                                   // four on the floor
+            if rnd(100) < 35 { lane[14] = true }                 // push into the loop
+            if rnd(100) < 20 { lane[7] = true }                  // syncopated kick
+        case .snare, .clap:
+            put([4, 12])                                         // backbeat
+            if rnd(100) < 30 { lane[15] = true }                 // fill hit
+        case .hat:
+            for s in stride(from: 0, to: stepCount, by: 2) { lane[s] = true }   // 8ths
+            if rnd(100) < 50 { for s in [3, 11] where rnd(100) < 60 { lane[s] = true } } // shuffle ghosts
+            if rnd(100) < 30 { lane[rnd(stepCount)] = false }    // human gap
+        case .openHat:
+            put([2, 6, 10, 14].filter { _ in rnd(100) < 70 })    // offbeats, some dropped
+        case .tom, .rim, .perc:
+            for _ in 0..<(2 + rnd(3)) {                          // sparse color, off the downbeats
+                let s = rnd(stepCount)
+                if s % 4 != 0 { lane[s] = true }
+            }
+        }
+        return lane
+    }
+
+    /// Category-aware melodic generators — all over scale degrees, always in key.
+    private func sparkMelodicLane(category: PatchCategory, rnd: (Int) -> Int) -> [Int?] {
+        let maxRow = melodyRowCount - 1
+        let degrees = project.context.scale.degreeCount
+        let fifthDegree = min(degrees - 1, 4)
+        var lane = [Int?](repeating: nil, count: stepCount)
+
+        switch category {
+        case .bass:
+            // Root-anchored low line: root on the beats, walks to the fifth/octave.
+            for s in stride(from: 0, to: stepCount, by: 4) { lane[s] = 0 }
+            if rnd(100) < 60 { lane[6] = fifthDegree }
+            if rnd(100) < 50 { lane[10] = rnd(100) < 50 ? fifthDegree : 0 }
+            lane[14] = [0, fifthDegree, degrees][rnd(3)]         // turn into the loop
+            if rnd(100) < 40 { lane[3] = 0 }                     // syncopated push
+        case .pad:
+            // Long sparse anchors — chord tones breathing under everything.
+            lane[0] = degrees                                    // mid root
+            lane[8] = rnd(100) < 50 ? degrees + fifthDegree : fifthDegree
+            if rnd(100) < 40 { lane[12] = degrees }
+        case .keys, .pluck, .lead:
+            // The classic walk: gentle steps, rests for phrasing, chord-tone landings.
+            let anchors = [0, fifthDegree, degrees, degrees + fifthDegree, 2 * degrees].filter { $0 <= maxRow }
+            var row = degrees
+            for s in 0..<stepCount {
+                if s % 2 == 1 && rnd(100) < 45 { continue }
+                row = min(maxRow, max(0, row + [-2, -1, -1, 0, 1, 1, 2][rnd(7)]))
+                if s % 8 == 0, let anchor = anchors.min(by: { abs($0 - row) < abs($1 - row) }) { row = anchor }
+                lane[s] = row
+            }
+        }
+        return lane
+    }
+
+    private func writeMelodyLane(_ l: Layer, _ lane: [Int?]) {
+        project.patterns[editIndex].melodies[l.id] = lane
+        for s in 0..<stepCount {
+            if let r = lane[s] {
+                engine.setStep(track: l.engineId, pattern: editIndex, step: s, note: context.midiNote(forRow: r), velocity: l.melodyVelocity)
+            } else {
+                engine.setStep(track: l.engineId, pattern: editIndex, step: s, note: 0, velocity: 0)
+            }
+        }
+    }
+
+    private func writeDrumLane(_ l: Layer, _ lane: [Bool]) {
+        project.patterns[editIndex].drums[l.id] = lane
+        for s in 0..<stepCount {
+            engine.setStep(track: l.engineId, pattern: editIndex, step: s, note: 0, velocity: lane[s] ? l.drumVelocity : 0)
+        }
+    }
+
     /// Basic in-scale melody generator (placeholder for the future smart generator).
     /// A gentle random walk over scale degrees with rests, anchored to chord tones
     /// on strong beats. Freshly seeded per call, so every tap rerolls a new idea.

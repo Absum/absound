@@ -16,6 +16,7 @@ struct PatternStudioView: View {
     @State private var showSoundLab = false
     @State private var midiExport: MidiExportItem?
     @State private var confirmClear = false
+    @State private var confirmSpark = false
     @State private var confirmRemoveLayer: UUID?
     @EnvironmentObject var toast: ToastCenter
     @Environment(\.verticalSizeClass) private var vSize
@@ -45,6 +46,11 @@ struct PatternStudioView: View {
         }
         .fullScreenCover(isPresented: $showSoundLab) { SoundLabView(transport: transport) }
         .sheet(item: $midiExport) { item in ShareSheet(url: item.url).presentationDetents([.medium]) }
+        .confirmationDialog("Spark a new idea? This replaces the notes in this pattern.",
+                            isPresented: $confirmSpark, titleVisibility: .visible) {
+            Button("Spark new idea") { spark() }
+            Button("Cancel", role: .cancel) {}
+        }
         .confirmationDialog(clearDialogTitle, isPresented: $confirmClear, titleVisibility: .visible) {
             Button(clearLabel, role: .destructive) {
                 transport.clearCurrent()
@@ -93,6 +99,15 @@ struct PatternStudioView: View {
             transportBar
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 10)
+    }
+
+    private func sparkTapped() {
+        if transport.patternHasContent { confirmSpark = true } else { spark() }
+    }
+    private func spark() {
+        transport.sparkIdea()
+        if !transport.isPlaying { transport.playPattern() }   // hear it immediately
+        toast.show("New idea sparked — tap ✨ to reroll", icon: "sparkles")
     }
 
     private var clearLabel: String {
@@ -209,6 +224,17 @@ struct PatternStudioView: View {
                      : (transport.patternNames.indices.contains(transport.editIndex)
                         ? transport.patternNames[transport.editIndex] : ""))
                     .font(Theme.title(15)).foregroundStyle(Theme.frost.opacity(0.85)).lineLimit(1)
+            }
+            Spacer()
+            Button { sparkTapped() } label: {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.bgTop)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(
+                        LinearGradient(colors: [Theme.cyan, Theme.teal],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)))
+                    .shadow(color: Theme.cyan.opacity(0.5), radius: 6)
             }
             Spacer()
             HStack(spacing: 12) {
