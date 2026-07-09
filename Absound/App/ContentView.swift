@@ -12,6 +12,7 @@ struct ContentView: View {
     @StateObject private var patchLibrary = PatchLibrary()
     @StateObject private var songLibrary = SongLibrary()
     @StateObject private var toast = ToastCenter()
+    @State private var showOnboarding = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -35,11 +36,21 @@ struct ContentView: View {
         .environmentObject(songLibrary)
         .environmentObject(toast)
         .overlay { ToastOverlay().environmentObject(toast) }
+        .fullScreenCover(isPresented: $showOnboarding) {
+            OnboardingView {
+                selection = 0
+                transport.sparkIdea()
+                if !transport.isPlaying { transport.playPattern() }
+                toast.show("New idea sparked — tap ✨ to reroll", icon: "sparkles")
+            }
+            .environmentObject(toast)
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background || phase == .inactive { transport.saveNow() }
         }
         .onAppear {
             #if DEBUG
+            if !UserDefaults.standard.bool(forKey: "didOnboarding") { showOnboarding = true }
             let env = ProcessInfo.processInfo.environment
             switch env["ABSOUND_START_TAB"] {
             case "sounds": selection = 1
@@ -48,6 +59,7 @@ struct ContentView: View {
             default: break
             }
             if env["ABSOUND_AUTOPLAY"] != nil { transport.playPattern() }
+            if env["ABSOUND_ONBOARD"] != nil { showOnboarding = true }
             #endif
         }
     }
