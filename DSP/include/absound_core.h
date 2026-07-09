@@ -173,6 +173,12 @@ void ab_core_set_master_fx(ABAudioCore *core, const ABFXChain *chain);
 void ab_core_set_track_strip(ABAudioCore *core, int track,
                              float gain, float pan, float delaySend, float reverbSend);
 
+/* Groove: swing 0..1 shuffles paired 16ths (even long, odd short); accent 0..1
+ * shapes velocity by beat position (downbeats full, offbeats softened);
+ * closed hat always chokes the open hat. */
+void ab_core_set_swing(ABAudioCore *core, float amount);
+void ab_core_set_accent(ABAudioCore *core, float amount);
+
 /* Metering: decaying stereo peak levels for the UI (poll at display rate).
  * Track level is post-fader; master level is post-chain but PRE-soft-clip,
  * so values above 1.0 mean the mix is overdriving into the limiter. */

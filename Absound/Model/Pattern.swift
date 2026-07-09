@@ -89,6 +89,8 @@ struct Project: Codable, Identifiable {
     var song: [Int]                  // indices into `patterns`
     var currentPatternIndex: Int     // which pattern the Studio edits
     var masterFX: [FXSlot]? = nil    // master-bus insert chain (nil == empty)
+    var swing: Double? = nil         // 0..1 paired-16th shuffle (nil == 0)
+    var accent: Double? = nil        // 0..1 beat-position velocity shaping (nil == default 0.35)
 
     var masterChain: [FXSlot] {
         get { masterFX ?? [] }
@@ -102,7 +104,7 @@ struct Project: Codable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, contextRoot, scaleRaw, baseOctave, tempo, layers, patterns, song, currentPatternIndex, masterFX
+        case id, name, contextRoot, scaleRaw, baseOctave, tempo, layers, patterns, song, currentPatternIndex, masterFX, swing, accent
     }
 
     init(id: UUID = UUID(), name: String = "My Song", contextRoot: Int, scaleRaw: String,
@@ -129,6 +131,8 @@ struct Project: Codable, Identifiable {
         song = try c.decode([Int].self, forKey: .song)
         currentPatternIndex = try c.decode(Int.self, forKey: .currentPatternIndex)
         masterFX = try c.decodeIfPresent([FXSlot].self, forKey: .masterFX)
+        swing = try c.decodeIfPresent(Double.self, forKey: .swing)
+        accent = try c.decodeIfPresent(Double.self, forKey: .accent)
     }
 
     static func demo() -> Project {

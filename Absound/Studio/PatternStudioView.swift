@@ -471,6 +471,20 @@ private struct SettingsSheet: View {
                 Section("Tempo") {
                     Stepper("\(Int(transport.tempo)) BPM", value: Binding(get: { transport.tempo }, set: { transport.setTempo($0) }), in: 60...200)
                 }
+                Section {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Swing  \(Int(transport.swing * 100))%")
+                        Slider(value: Binding(get: { transport.swing }, set: { transport.swing = $0 }), in: 0...1)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Accent  \(Int(transport.accent * 100))%")
+                        Slider(value: Binding(get: { transport.accent }, set: { transport.accent = $0 }), in: 0...1)
+                    }
+                } header: {
+                    Text("Groove")
+                } footer: {
+                    Text("Swing shuffles paired 16ths; accent softens offbeats so downbeats punch. The closed hat always chokes the open hat.")
+                }
             }
             .navigationTitle("Project")
             .navigationBarTitleDisplayMode(.inline)

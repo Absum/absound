@@ -378,7 +378,12 @@ struct DrumVoice {
         vel = v; busy = true; declick = 0; pendingVel = -1.0f;
         amp.hardReset(); amp.gateOn(); pitchEnv = 1.0f; osc.phase = 0.0;
     }
-    void hardReset() { busy = false; declick = 0; pendingVel = -1.0f; amp.hardReset(); filt.reset(); }
+    void hardReset() { busy = false; declick = 0; pendingVel = -1.0f; chokeCountdown = 0; amp.hardReset(); filt.reset(); }
+
+    // Choke group: fade out fast (~3 ms) without retriggering (hat choke).
+    int chokeCountdown = 0;
+    static constexpr int kChoke = 128;
+    void choke() { if (busy && chokeCountdown == 0) chokeCountdown = kChoke; }
 
     inline float render() {
         if (!busy) return 0.0f;
@@ -387,6 +392,10 @@ struct DrumVoice {
         if (declick > 0) {
             fade = static_cast<float>(declick) / kDeclick;
             if (--declick == 0) { float v = pendingVel >= 0 ? pendingVel : vel; start(v); return 0.0f; }
+        }
+        if (chokeCountdown > 0) {
+            fade *= static_cast<float>(chokeCountdown) / kChoke;
+            if (--chokeCountdown == 0) { busy = false; return 0.0f; }
         }
         float a = amp.next();
         if (!amp.active()) { busy = false; return 0.0f; }
@@ -1015,6 +1024,14 @@ struct ABAudioCore {
     std::atomic<int> uiPattern{0};
     std::atomic<int> uiSongPos{-1};
     double samplesPerStep = 0.0, stepAccum = 0.0;
+    std::atomic<float> swingAmt{0.0f};
+    std::atomic<float> accentAmt{0.35f};
+    /// Duration of the CURRENT step: swing lengthens even 16ths, shortens odd
+    /// ones — the pair stays two steps long, so tempo is untouched.
+    double stepLen() const {
+        double s = swingAmt.load(std::memory_order_relaxed) * 0.33;
+        return samplesPerStep * ((curStep % 2 == 0) ? (1.0 + s) : (1.0 - s));
+    }
     int curStep = 0; bool lastPlaying = false;
     int ctrlCountdown = 0;
 
@@ -1042,15 +1059,33 @@ struct ABAudioCore {
     }
     void triggerStep(int step) {
         int gate = static_cast<int>(samplesPerStep * 0.9);
+        // Accent: shape velocity by beat position (downbeat full, offbeats soft).
+        const float acc = accentAmt.load(std::memory_order_relaxed);
+        const float posF = (step % 4 == 0) ? 1.0f
+                         : (step % 2 == 0) ? 1.0f - 0.22f * acc
+                                           : 1.0f - 0.42f * acc;
+        // Hat choke: a closed hat on this step cuts any ringing open hat.
+        bool hatHit = false;
+        for (auto &t : tracks) {
+            if (t.active.load(std::memory_order_acquire) && t.kind == AB_KIND_DRUM &&
+                t.drum.type == AB_DRUM_HAT && t.steps[curPattern][step].vel > 0.0f) { hatHit = true; break; }
+        }
+        if (hatHit) {
+            for (auto &t : tracks) {
+                if (t.active.load(std::memory_order_acquire) && t.kind == AB_KIND_DRUM &&
+                    t.drum.type == AB_DRUM_OPENHAT) t.drum.choke();
+            }
+        }
         for (auto &t : tracks) {
             if (!t.active.load(std::memory_order_acquire)) continue;
             StepData &sd = t.steps[curPattern][step];
             if (sd.vel <= 0.0f) continue;
+            float v = sd.vel * posF;
             if (t.kind == AB_KIND_SYNTH) {
-                t.alloc()->noteOn(t.cfg, sd.note, sd.vel, gate, t.lastNote);
+                t.alloc()->noteOn(t.cfg, sd.note, v, gate, t.lastNote);
                 t.lastNote = sd.note;
             } else {
-                t.drum.trigger(sd.vel);
+                t.drum.trigger(v);
             }
         }
     }
@@ -1276,9 +1311,10 @@ void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
     for (int i = 0; i < frames; ++i) {
         if (isPlaying) {
             core->stepAccum += 1.0;
-            if (core->stepAccum >= core->samplesPerStep) {
-                core->stepAccum -= core->samplesPerStep;
-                if (core->stepAccum >= core->samplesPerStep)      // audit: tempo-jump machine-gun
+            const double curLen = core->stepLen();
+            if (core->stepAccum >= curLen) {
+                core->stepAccum -= curLen;
+                if (core->stepAccum >= curLen)                    // audit: tempo-jump machine-gun
                     core->stepAccum = 0.0;
                 core->curStep = (core->curStep + 1) % AB_NUM_STEPS;
                 if (core->curStep == 0) core->advancePattern(false);
@@ -1341,8 +1377,19 @@ void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
         right[i] = softClip(mR);
     }
 
-    if (isPlaying && core->samplesPerStep > 0.0)
-        core->uiPos.store(core->curStep + core->stepAccum / core->samplesPerStep, std::memory_order_relaxed);
+    if (isPlaying && core->samplesPerStep > 0.0) {
+        const double curLen = core->stepLen();
+        core->uiPos.store(core->curStep + (curLen > 0 ? core->stepAccum / curLen : 0.0), std::memory_order_relaxed);
+    }
+}
+
+void ab_core_set_swing(ABAudioCore *core, float amount) {
+    if (!core) return;
+    core->swingAmt.store(amount < 0 ? 0.0f : (amount > 1 ? 1.0f : amount), std::memory_order_relaxed);
+}
+void ab_core_set_accent(ABAudioCore *core, float amount) {
+    if (!core) return;
+    core->accentAmt.store(amount < 0 ? 0.0f : (amount > 1 ? 1.0f : amount), std::memory_order_relaxed);
 }
 
 float ab_core_track_level(ABAudioCore *core, int track) {

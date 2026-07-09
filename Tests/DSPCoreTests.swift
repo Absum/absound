@@ -368,6 +368,38 @@ final class DSPCoreTests: XCTestCase {
         XCTAssertLessThan(silent.peak, 0.01, "drum strip gain must control drum tracks")
     }
 
+    func testGrooveAccentSoftensOffbeats() {
+        func rms(accent: Float) -> Double {
+            let core = ab_core_create(sr)!; defer { ab_core_destroy(core) }
+            let h = addTrack(core, kind: AB_KIND_DRUM, sound: AB_DRUM_HAT)
+            for s in 0..<16 { setStep(core, h, s, 0, 120) }
+            ab_core_set_accent(core, accent)
+            ab_core_set_playing(core, 1)
+            return renderMetrics(core, seconds: 2.0).rms
+        }
+        let flat = rms(accent: 0), shaped = rms(accent: 1)
+        XCTAssertLessThan(shaped, flat * 0.97, "accent must soften offbeats (flat \(flat) vs \(shaped))")
+    }
+
+    func testSwingLengthensEvenSteps() {
+        func framesToStepOne(swing: Float) -> Int {
+            let core = ab_core_create(sr)!; defer { ab_core_destroy(core) }
+            let k = addTrack(core, kind: AB_KIND_DRUM, sound: AB_DRUM_KICK)
+            setStep(core, k, 0, 0, 120)
+            ab_core_set_swing(core, swing)
+            ab_core_set_playing(core, 1)
+            var l = [Float](repeating: 0, count: 64), r = l
+            var frames = 0
+            while ab_core_current_step(core) < 1 && frames < 200_000 {
+                ab_core_render(core, &l, &r, 64); frames += 64
+            }
+            return frames
+        }
+        let straight = framesToStepOne(swing: 0), swung = framesToStepOne(swing: 1)
+        XCTAssertGreaterThan(Double(swung), Double(straight) * 1.2,
+                             "swing must lengthen the first (even) step (\(straight) vs \(swung))")
+    }
+
     func testMetersFollowSignalAndDecay() {
         let core = ab_core_create(sr); defer { ab_core_destroy(core) }
         let k = addTrack(core, kind: AB_KIND_DRUM, sound: AB_DRUM_KICK)

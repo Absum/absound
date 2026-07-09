@@ -86,6 +86,7 @@ final class TransportController: ObservableObject {
         engine.setSongMode(false)
         engine.setPattern(p.currentPatternIndex)
         engine.setSong(p.song)
+        pushGroove()
         pushEverything()
 
         previewEngineId = engine.addTrack(kind: TrackKind.synth.rawValue, sound: 0)
@@ -99,6 +100,20 @@ final class TransportController: ObservableObject {
 
     /// Immediate save (called when the app backgrounds).
     func saveNow() { store.save(project) }
+
+    // MARK: - Groove
+    var swing: Double {
+        get { project.swing ?? 0 }
+        set { project.swing = newValue == 0 ? nil : newValue; engine.setSwing(Float(newValue)) }
+    }
+    var accent: Double {
+        get { project.accent ?? 0.35 }
+        set { project.accent = newValue; engine.setAccent(Float(newValue)) }
+    }
+    private func pushGroove() {
+        engine.setSwing(Float(project.swing ?? 0))
+        engine.setAccent(Float(project.accent ?? 0.35))
+    }
 
     // MARK: - Undo / redo (snapshot stack over the whole Project value)
 
@@ -155,6 +170,7 @@ final class TransportController: ObservableObject {
             engine.setTempo(p.tempo); tempo = p.tempo
             engine.setSong(p.song)
             engine.setPattern(p.currentPatternIndex)
+            pushGroove()
             pushEverything()
         } else {
             restoreStructural(p)
@@ -188,6 +204,7 @@ final class TransportController: ObservableObject {
         tempo = newP.tempo
         engine.setPattern(newP.currentPatternIndex)
         engine.setSong(newP.song)
+        pushGroove()
         pushEverything()
     }
 
@@ -219,6 +236,7 @@ final class TransportController: ObservableObject {
         engine.setSongMode(false)
         engine.setPattern(newP.currentPatternIndex)
         engine.setSong(newP.song)
+        pushGroove()
         pushEverything()
         saveNow()
     }
