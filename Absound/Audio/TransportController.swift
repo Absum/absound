@@ -619,7 +619,8 @@ final class TransportController: ObservableObject {
     func toggleRecord() { isRecording.toggle(); if !isRecording { endStroke() } }
     func highwayTap(row: Int) {
         audition(row: row)
-        guard isRecording, isPlaying, playhead.playPosition >= 0 else { return }
+        guard isRecording, isPlaying, playhead.playPosition >= 0,
+              !songPlaying || playhead.currentPattern == editIndex else { return }
         placeMelody(row: row, step: Int(playhead.playPosition.rounded()) % stepCount)
     }
 

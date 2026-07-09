@@ -94,6 +94,7 @@ struct PianoRollView: View {
                 let on = melody[step] == row
                 let ghost = others.contains { $0[step] == row }
                 let playh = step == playhead.currentStep
+                    && (!transport.songPlaying || playhead.currentPattern == transport.editIndex)
                 if on {
                     ctx.fill(path, with: .color(Theme.cyan.opacity(playh ? 1.0 : 0.85)))
                 } else if ghost {
@@ -186,6 +187,7 @@ struct DrumLanesView: View {
                 let path = Path(roundedRect: rect, cornerRadius: 4)
                 let on = hits[step]
                 let playh = step == playhead.currentStep
+                    && (!transport.songPlaying || playhead.currentPattern == transport.editIndex)
                 if on {
                     ctx.fill(path, with: .color(color.opacity(playh ? 1.0 : 0.85)))
                 } else {
