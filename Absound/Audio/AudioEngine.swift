@@ -4,27 +4,79 @@
 //  pulls audio straight from ab_core_render on the realtime thread — the engine's
 //  internal sequencer keeps timing locked to the audio clock.
 //
+//  Resilience: init touches NO CoreAudio (a wedged audio daemon — Mac sleep,
+//  phone call, media-services crash — must never block or kill launch). The
+//  graph is built and started asynchronously on a serial queue; AVAudioSession
+//  interruptions, route changes, media-services resets, and app foregrounding
+//  all reconcile the engine back to the app's intent (`wantRunning`).
+//
 
 import AVFoundation
-import Foundation
+import UIKit
 
 final class AudioEngine {
-    private let engine = AVAudioEngine()
-    private var sourceNode: AVAudioSourceNode!
+    private var engine = AVAudioEngine()
+    private var sourceNode: AVAudioSourceNode?
     private var core: OpaquePointer?
-    private(set) var sampleRate: Double = 44_100
-    private var running = false
+    /// The core runs at a fixed rate; AVAudioEngine sample-rate-converts to the
+    /// hardware, so we never need to ask CoreAudio anything before first render.
+    private(set) var sampleRate: Double = 48_000
+    /// Intent — what the app *wants*. `engine.isRunning` is the truth; the two
+    /// are reconciled after every lifecycle event.
+    private var wantRunning = false
+    private var graphBuilt = false
+    private let audioQueue = DispatchQueue(label: "fi.absum.absound.audio", qos: .userInitiated)
 
     init() {
-        configureSession()
-        // Build the core at the hardware sample rate to avoid resampling.
-        sampleRate = AVAudioSession.sharedInstance().sampleRate
-        if sampleRate < 8_000 { sampleRate = 44_100 }
         core = ab_core_create(sampleRate)
+        observeLifecycle()
+    }
 
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2)!
+    deinit {
+        engine.stop()
+        if let core { ab_core_destroy(core) }
+    }
+
+    // MARK: - Bring-up / lifecycle
+
+    func start() {
+        wantRunning = true
+        audioQueue.async { [weak self] in self?.startLocked() }
+    }
+
+    func stop() {
+        wantRunning = false
+        audioQueue.async { [weak self] in self?.engine.stop() }
+    }
+
+    /// Build the graph (once) and start the engine if the app wants audio.
+    /// Runs on `audioQueue` only.
+    private func startLocked() {
+        buildGraphLocked()
+        guard wantRunning, graphBuilt, !engine.isRunning else { return }
+        do {
+            try engine.start()
+        } catch {
+            // Transient failures (session not yet active after an interruption)
+            // usually clear in well under a second — retry once, then leave it
+            // to the next lifecycle reconcile.
+            audioQueue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.wantRunning, self.graphBuilt, !self.engine.isRunning else { return }
+                try? self.engine.start()
+            }
+        }
+    }
+
+    private func buildGraphLocked() {
+        guard !graphBuilt else { return }
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, mode: .default, options: [])
+        try? session.setPreferredSampleRate(sampleRate)
+        try? session.setActive(true)
+
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2) else { return }
         let coreRef = core
-        sourceNode = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
+        let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
             guard abl.count >= 2,
                   let lData = abl[0].mData?.assumingMemoryBound(to: Float.self),
@@ -34,35 +86,59 @@ final class AudioEngine {
             ab_core_render(coreRef, lData, rData, Int32(frameCount))
             return noErr
         }
-
-        engine.attach(sourceNode)
-        engine.connect(sourceNode, to: engine.mainMixerNode, format: format)
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
         engine.prepare()
+        sourceNode = node
+        graphBuilt = true
     }
 
-    deinit {
+    /// Bring reality back in line with intent after any lifecycle event.
+    private func reconcile() {
+        audioQueue.async { [weak self] in
+            guard let self, self.wantRunning else { return }
+            self.startLocked()
+        }
+    }
+
+    /// Media services died and came back: every audio object we held is junk.
+    /// Rebuild the whole graph from scratch.
+    private func rebuildAfterReset() {
         engine.stop()
-        if let core { ab_core_destroy(core) }
+        engine = AVAudioEngine()
+        sourceNode = nil
+        graphBuilt = false
+        if wantRunning { startLocked() }
     }
 
-    // MARK: - Session / lifecycle
-
-    private func configureSession() {
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default, options: [])
-        try? session.setPreferredSampleRate(44_100)
-        try? session.setActive(true)
-    }
-
-    func start() {
-        guard !running else { return }
-        do { try engine.start(); running = true }
-        catch { print("AudioEngine start failed: \(error)") }
-    }
-
-    func stop() {
-        engine.stop()
-        running = false
+    private func observeLifecycle() {
+        let nc = NotificationCenter.default
+        nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { [weak self] note in
+            guard let self,
+                  let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            if type == .ended {
+                let raw = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                if AVAudioSession.InterruptionOptions(rawValue: raw).contains(.shouldResume) {
+                    self.reconcile()
+                }
+            }
+            // .began: the system already paused us; intent is unchanged, so the
+            // next reconcile (interruption end / foreground) restarts cleanly.
+        }
+        nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.reconcile()   // headphones out, AirPods in — engine often stops
+        }
+        nc.addObserver(forName: .AVAudioEngineConfigurationChange, object: nil, queue: nil) { [weak self] _ in
+            self?.reconcile()
+        }
+        nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: nil) { [weak self] _ in
+            guard let self else { return }
+            self.audioQueue.async { self.rebuildAfterReset() }
+        }
+        nc.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.reconcile()
+        }
     }
 
     // MARK: - Transport / pattern passthrough
