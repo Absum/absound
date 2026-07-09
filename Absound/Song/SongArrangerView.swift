@@ -325,7 +325,19 @@ struct SongArrangerView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(song.isEmpty ? "No sections" : "\(song.count) section\(song.count == 1 ? "" : "s")")
                     .font(Theme.title(16)).foregroundStyle(Theme.frost)
-                Text("\(Int(transport.tempo)) BPM").font(Theme.light(12)).foregroundStyle(Theme.frost.opacity(0.5))
+                HStack(spacing: 8) {
+                    Button { transport.setTempo(transport.tempo - 1) } label: {
+                        Image(systemName: "minus").font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Theme.frost.opacity(0.7)).frame(width: 20, height: 20)
+                            .background(Circle().fill(Color.white.opacity(0.08)))
+                    }
+                    Text("\(Int(transport.tempo)) BPM").font(Theme.light(12)).foregroundStyle(Theme.frost.opacity(0.6)).monospacedDigit()
+                    Button { transport.setTempo(transport.tempo + 1) } label: {
+                        Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Theme.frost.opacity(0.7)).frame(width: 20, height: 20)
+                            .background(Circle().fill(Color.white.opacity(0.08)))
+                    }
+                }
             }
             Spacer()
             Button {

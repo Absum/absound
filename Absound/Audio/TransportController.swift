@@ -49,6 +49,8 @@ final class TransportController: ObservableObject {
     /// The continuous playhead publishes at 60 fps — only worth it while the
     /// Aurora Highway is on screen (its sole consumer).
     var playheadEnabled = false
+    /// UI feedback hook (wired to the toast center by ContentView).
+    var notify: ((String, String) -> Void)?
     @Published private(set) var project: Project
     @Published var selection: Selection
 
@@ -100,6 +102,13 @@ final class TransportController: ObservableObject {
 
     /// Immediate save (called when the app backgrounds).
     func saveNow() { store.save(project) }
+
+    private var engineHasRoom: Bool {
+        // One engine slot is reserved for the Sound Lab preview track.
+        if project.layers.count < Int(AB_MAX_TRACKS) - 1 { return true }
+        notify?("All \(AB_MAX_TRACKS - 1) layers in use", "exclamationmark.circle.fill")
+        return false
+    }
 
     // MARK: - Groove
     var swing: Double {
@@ -334,6 +343,7 @@ final class TransportController: ObservableObject {
     // MARK: - Layer management
 
     func addSynthLayer(_ patch: SynthPatch) {
+        guard engineHasRoom else { return }
         checkpoint()
         var l = Layer.synth(patch)
         l.engineId = engine.addTrack(kind: TrackKind.synth.rawValue, sound: 0)
@@ -352,6 +362,7 @@ final class TransportController: ObservableObject {
         engine.setFX(project.layers[i].engineId, patch.fxChain.toABChain())
     }
     func addDrumLayer(_ sound: DrumSound) {
+        guard engineHasRoom else { return }
         checkpoint()
         var l = Layer.drum(sound)
         l.engineId = engine.addTrack(kind: TrackKind.drum.rawValue, sound: sound.rawValue)
@@ -420,15 +431,19 @@ final class TransportController: ObservableObject {
         objectWillChange.send()
     }
     func addPattern() {
+        guard project.patterns.count < Project.maxPatterns else {
+            notify?("All \(Project.maxPatterns) patterns in use", "exclamationmark.circle.fill"); return
+        }
         checkpoint()
-        guard project.patterns.count < Project.maxPatterns else { return }
         let name = Project.patternNames[project.patterns.count]
         project.patterns.append(PatternData(name: name))
         selectPattern(project.patterns.count - 1)   // empty pattern already clear in engine
     }
     func duplicatePattern() {
+        guard project.patterns.count < Project.maxPatterns else {
+            notify?("All \(Project.maxPatterns) patterns in use", "exclamationmark.circle.fill"); return
+        }
         checkpoint()
-        guard project.patterns.count < Project.maxPatterns else { return }
         var copy = project.patterns[editIndex]
         copy.id = UUID()
         copy.name = Project.patternNames[project.patterns.count]
@@ -442,8 +457,10 @@ final class TransportController: ObservableObject {
     // MARK: - Song management
 
     func appendSection(_ patternIndex: Int) {
+        guard project.song.count < Int(AB_MAX_SONG_LEN) else {
+            notify?("Song is full (\(AB_MAX_SONG_LEN) sections)", "exclamationmark.circle.fill"); return
+        }
         checkpoint()
-        guard project.song.count < Int(AB_MAX_SONG_LEN) else { return }
         project.song.append(patternIndex)
         engine.setSong(project.song)
     }

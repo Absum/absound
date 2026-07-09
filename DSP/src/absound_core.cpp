@@ -207,6 +207,7 @@ struct SynthVoice {
     int note = -1;
     bool busy = false;
     int gateCountdown = -1;
+    uint32_t serial = 0;   // allocation order, for steal decisions
     double curNote = 60.0, targetNote = 60.0; // glide in note space
     double glideCoef = 1.0;                    // per-sample approach
     // control-block cached values
@@ -966,11 +967,20 @@ struct Track {
     void clearAllPatterns() {
         for (auto &pat : steps) for (auto &s : pat) s = {60, 0.0f};
     }
+    uint32_t noteSerial = 0;
     SynthVoice *alloc() {
-        for (auto &v : synth) if (!v.busy) return &v;
-        // Steal the oldest = the voice with the smallest remaining envelope value.
-        SynthVoice *steal = &synth[0];
-        for (auto &v : synth) if (v.amp.value < steal->amp.value) steal = &v;
+        for (auto &v : synth) if (!v.busy) { v.serial = ++noteSerial; return &v; }
+        // Steal the quietest voice, but never the newest (its attack starts
+        // near zero and would always look "quietest").
+        uint32_t newest = 0;
+        for (auto &v : synth) if (v.serial > newest) newest = v.serial;
+        SynthVoice *steal = nullptr;
+        for (auto &v : synth) {
+            if (v.serial == newest) continue;
+            if (!steal || v.amp.value < steal->amp.value) steal = &v;
+        }
+        if (!steal) steal = &synth[0];
+        steal->serial = ++noteSerial;
         return steal;
     }
     // Audio-thread control-block maintenance.
@@ -1322,7 +1332,11 @@ void ab_core_note_on(ABAudioCore *core, int track, int midiNote, float velocity)
 }
 
 void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
-    if (!core || !left || !right) return;
+    if (!left || !right || frames <= 0) return;
+    if (!core) {   // never hand garbage to the hardware
+        for (int i = 0; i < frames; ++i) { left[i] = 0.0f; right[i] = 0.0f; }
+        return;
+    }
     core->applySongIfStaged();
     const bool isPlaying = core->playing.load(std::memory_order_relaxed) != 0;
     const double bpm = core->bpm.load(std::memory_order_relaxed);

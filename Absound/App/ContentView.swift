@@ -50,6 +50,7 @@ struct ContentView: View {
         }
         .onAppear {
             #if DEBUG
+            transport.notify = { [weak toast] msg, icon in toast?.show(msg, icon: icon) }
             if !UserDefaults.standard.bool(forKey: "didOnboarding") { showOnboarding = true }
             let env = ProcessInfo.processInfo.environment
             switch env["ABSOUND_START_TAB"] {

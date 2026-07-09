@@ -126,6 +126,9 @@ struct Project: Codable, Identifiable {
         name = try c.decodeIfPresent(String.self, forKey: .name) ?? "My Song"
         contextRoot = try c.decode(Int.self, forKey: .contextRoot)
         scaleRaw = try c.decode(String.self, forKey: .scaleRaw)
+        if Scale(rawValue: scaleRaw) == nil {
+            print("⚠️ Absound: unknown scale '\(scaleRaw)' in saved project — falling back to Minor")
+        }
         baseOctave = try c.decode(Int.self, forKey: .baseOctave)
         tempo = try c.decodeIfPresent(Double.self, forKey: .tempo) ?? 112
         layers = try c.decode([Layer].self, forKey: .layers)

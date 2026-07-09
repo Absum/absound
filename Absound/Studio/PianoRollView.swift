@@ -43,6 +43,7 @@ struct PianoRollView: View {
                             .onEnded { onEnded($0, stepW: stepW, cols: cols, rowCount: rowCount) }
                     )
             }
+            .defaultScrollAnchor(.center)   // open on the middle octave, not the top
             .background(RollBackground())
         }
     }
@@ -90,6 +91,12 @@ struct PianoRollView: View {
         defer { didDrag = false; brush = nil; transport.endStroke() }
         let dx = abs(v.translation.width), dy = abs(v.translation.height)
         guard !didDrag, dx + dy <= 12 else { return }   // only a true tap toggles
+        if v.location.x < gutter {
+            // Tapping a pitch label auditions that note.
+            let visRow = Int(v.location.y / rowHeight)
+            if visRow >= 0, visRow < rowCount { transport.audition(row: rowCount - 1 - visRow) }
+            return
+        }
         if let c = cell(v.location, stepW: stepW, cols: cols, rowCount: rowCount) {
             transport.toggleMelody(row: c.row, step: c.step)
         }

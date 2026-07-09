@@ -111,6 +111,26 @@ enum FXType: Int, Codable, CaseIterable, Identifiable {
 }
 
 struct FXSlot: Codable, Identifiable, Equatable {
+    /// Tolerant decode: an unknown effect type (newer save, older app) becomes
+    /// a disabled Drive slot instead of failing the whole chain.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        let raw = try c.decode(Int.self, forKey: .type)
+        if let t = FXType(rawValue: raw) {
+            type = t
+            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        } else {
+            print("⚠️ Absound: unknown FX type \(raw) in saved chain — slot disabled")
+            type = .drive
+            enabled = false
+        }
+        p1 = try c.decodeIfPresent(Float.self, forKey: .p1) ?? 0
+        p2 = try c.decodeIfPresent(Float.self, forKey: .p2) ?? 0
+        p3 = try c.decodeIfPresent(Float.self, forKey: .p3) ?? 0
+        p4 = try c.decodeIfPresent(Float.self, forKey: .p4) ?? 0
+    }
+
     var id = UUID()
     var type: FXType
     var enabled: Bool = true
