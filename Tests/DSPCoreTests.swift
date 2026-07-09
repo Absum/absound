@@ -368,6 +368,42 @@ final class DSPCoreTests: XCTestCase {
         XCTAssertLessThan(silent.peak, 0.01, "drum strip gain must control drum tracks")
     }
 
+    /// Hammer every UI-thread entry point while another thread renders.
+    /// Catches crashes/UB from the concurrency fixes (song staging, teardown guards).
+    func testConcurrentMutationStress() {
+        let core = ab_core_create(sr)!
+        defer { ab_core_destroy(core) }
+        ab_core_set_playing(core, 1)
+        ab_core_set_song_mode(core, 1)
+
+        let renderDone = expectation(description: "render")
+        let mutateDone = expectation(description: "mutate")
+
+        DispatchQueue.global().async {
+            var l = [Float](repeating: 0, count: 256), r = l
+            for _ in 0..<2_000 {
+                ab_core_render(core, &l, &r, 256)
+                XCTAssertFalse(l[0].isNaN)
+            }
+            renderDone.fulfill()
+        }
+        DispatchQueue.global().async {
+            var song = [Int32](repeating: 0, count: 8)
+            for i in 0..<2_000 {
+                let t = ab_core_add_track(core, Int32(AB_KIND_SYNTH), 0)
+                ab_core_set_step(core, t, 0, Int32(i % 16), 60, 100)
+                ab_core_note_on(core, t, 60, 0.8)
+                song[i % 8] = Int32(i % Int(AB_MAX_PATTERNS))
+                song.withUnsafeBufferPointer { ab_core_set_song(core, $0.baseAddress, Int32(1 + i % 8)) }
+                ab_core_set_pattern(core, Int32(i % Int(AB_MAX_PATTERNS)))
+                ab_core_set_tempo(core, 60 + Double(i % 140))
+                ab_core_remove_track(core, t)
+            }
+            mutateDone.fulfill()
+        }
+        wait(for: [renderDone, mutateDone], timeout: 30)
+    }
+
     func testGrooveAccentSoftensOffbeats() {
         func rms(accent: Float) -> Double {
             let core = ab_core_create(sr)!; defer { ab_core_destroy(core) }

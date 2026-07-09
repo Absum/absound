@@ -1038,12 +1038,24 @@ struct ABAudioCore {
     std::atomic<int> editPattern{0};
     std::atomic<int> songModeFlag{0};
     std::atomic<int> songLen{0};
-    int song[AB_MAX_SONG_LEN] = {0};
+    int song[AB_MAX_SONG_LEN] = {0};              // audio-thread owned after staging
+    int songStagedBuf[AB_MAX_SONG_LEN] = {0};     // UI writes here...
+    std::atomic<int> songStagedLen{-1};           // ...then publishes length (-1 = clean)
     int curPattern = 0, songPos = 0;
 
     void recomputeStepLen() {
         samplesPerStep = (60.0 / bpm.load(std::memory_order_relaxed)) * sr / 4.0;
     }
+    /// Adopt a staged song update (audio thread). Indices are bounds-clamped at
+    /// write AND at use, so even a torn re-stage mid-copy stays harmless.
+    void applySongIfStaged() {
+        int len = songStagedLen.exchange(-1, std::memory_order_acq_rel);
+        if (len < 0) return;
+        for (int i = 0; i < len; ++i) song[i] = songStagedBuf[i];
+        songLen.store(len, std::memory_order_release);
+        if (songPos >= len) songPos = 0;
+    }
+
     void advancePattern(bool first) {
         const int len = songLen.load(std::memory_order_acquire);   // single load (audit: %0 fix)
         if (songModeFlag.load(std::memory_order_relaxed) && len > 0) {
@@ -1052,11 +1064,15 @@ struct ABAudioCore {
             curPattern = (idx >= 0 && idx < AB_MAX_PATTERNS) ? idx : 0;
             uiSongPos.store(songPos, std::memory_order_relaxed);
         } else {
-            curPattern = editPattern.load(std::memory_order_relaxed);
+            curPattern = editPattern.load(std::memory_order_acquire);
             uiSongPos.store(-1, std::memory_order_relaxed);
         }
         uiPattern.store(curPattern, std::memory_order_relaxed);
     }
+    // NOTE (thread-safety): step cells are written by the UI thread (set_step)
+    // while this reads them. Cells are a plain int + float; a torn read can at
+    // worst mistrigger ONE step once, and both fields are clamped at the ABI.
+    // Accepted by design — atomics per cell would cost more than the fault.
     void triggerStep(int step) {
         int gate = static_cast<int>(samplesPerStep * 0.9);
         // Accent: shape velocity by beat position (downbeat full, offbeats soft).
@@ -1140,8 +1156,11 @@ void ab_core_set_pattern(ABAudioCore *core, int pattern) {
 void ab_core_set_song(ABAudioCore *core, const int *seq, int len) {
     if (!core) return;
     if (len < 0) len = 0; else if (len > AB_MAX_SONG_LEN) len = AB_MAX_SONG_LEN;
-    for (int i = 0; i < len; ++i) core->song[i] = (seq && seq[i] >= 0 && seq[i] < AB_MAX_PATTERNS) ? seq[i] : 0;
-    core->songLen.store(len, std::memory_order_release);
+    // Stage: the audio thread adopts the buffer at the next render block, so
+    // it never reads song[] while this thread is writing it.
+    for (int i = 0; i < len; ++i)
+        core->songStagedBuf[i] = (seq && seq[i] >= 0 && seq[i] < AB_MAX_PATTERNS) ? seq[i] : 0;
+    core->songStagedLen.store(len, std::memory_order_release);
 }
 
 void ab_core_set_song_mode(ABAudioCore *core, int on) {
@@ -1294,6 +1313,7 @@ void ab_core_note_on(ABAudioCore *core, int track, int midiNote, float velocity)
 
 void ab_core_render(ABAudioCore *core, float *left, float *right, int frames) {
     if (!core || !left || !right) return;
+    core->applySongIfStaged();
     const bool isPlaying = core->playing.load(std::memory_order_relaxed) != 0;
     const double bpm = core->bpm.load(std::memory_order_relaxed);
 
