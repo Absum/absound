@@ -54,15 +54,16 @@ struct PianoRollView: View {
     private func onChanged(_ v: DragGesture.Value, stepW: CGFloat, cols: Int, rowCount: Int) {
         let dx = abs(v.translation.width), dy = abs(v.translation.height)
         guard dx + dy > 12 else { return }     // still might be a tap
-        if dy > dx { return }                  // vertical drag -> let the ScrollView scroll
-        didDrag = true
+        didDrag = true                         // any real movement is not a tap
+        if dy > dx { return }                  // vertical drag -> let the ScrollView scroll, paint nothing
         if let c = cell(v.location, stepW: stepW, cols: cols, rowCount: rowCount) {
             transport.placeMelody(row: c.row, step: c.step)
         }
     }
     private func onEnded(_ v: DragGesture.Value, stepW: CGFloat, cols: Int, rowCount: Int) {
         defer { didDrag = false }
-        guard !didDrag else { return }
+        let dx = abs(v.translation.width), dy = abs(v.translation.height)
+        guard !didDrag, dx + dy <= 12 else { return }   // only a true tap toggles
         if let c = cell(v.location, stepW: stepW, cols: cols, rowCount: rowCount) {
             transport.toggleMelody(row: c.row, step: c.step)
         }
@@ -156,15 +157,16 @@ struct DrumLanesView: View {
     private func onChanged(_ v: DragGesture.Value, stepW: CGFloat, cols: Int, lanes: [Layer]) {
         let dx = abs(v.translation.width), dy = abs(v.translation.height)
         guard dx + dy > 12 else { return }
-        if dy > dx { return }
-        didDrag = true
+        didDrag = true                         // any real movement is not a tap
+        if dy > dx { return }                  // vertical drag -> scroll, paint nothing
         guard let c = cell(v.location, stepW: stepW, cols: cols, lanes: lanes) else { return }
         if paintOn == nil { paintOn = !transport.drumLane(c.lane.id)[c.step] }   // first cell sets the brush
         transport.setDrum(c.lane.id, step: c.step, on: paintOn ?? true)
     }
     private func onEnded(_ v: DragGesture.Value, stepW: CGFloat, cols: Int, lanes: [Layer]) {
         defer { didDrag = false; paintOn = nil }
-        guard !didDrag else { return }
+        let dx = abs(v.translation.width), dy = abs(v.translation.height)
+        guard !didDrag, dx + dy <= 12 else { return }   // only a true tap toggles
         if let c = cell(v.location, stepW: stepW, cols: cols, lanes: lanes) {
             transport.toggleDrum(c.lane.id, step: c.step)
         }
