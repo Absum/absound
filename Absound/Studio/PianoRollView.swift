@@ -21,7 +21,10 @@ struct PianoRollView: View {
     var rowHeight: CGFloat = 30
     private let gutter: CGFloat = 42
     @State private var didDrag = false
-    @State private var paintErase: Bool? = nil   // first cell decides the brush
+    // Brush state machine: starting on empty paints; starting on a note waits
+    // for the second cell — rightward same-row drag stretches, anything else erases.
+    private enum Brush { case undecided(row: Int, step: Int), paint, erase, stretch(row: Int, step: Int) }
+    @State private var brush: Brush? = nil
 
     var body: some View {
         GeometryReader { geo in
@@ -57,17 +60,34 @@ struct PianoRollView: View {
         guard dx + dy > 12 else { return }     // still might be a tap
         didDrag = true                         // any real movement is not a tap
         if dy > dx { return }                  // vertical drag -> let the ScrollView scroll, paint nothing
-        if let c = cell(v.location, stepW: stepW, cols: cols, rowCount: rowCount) {
-            if paintErase == nil { paintErase = transport.selectedMelody[c.step] == c.row }
-            if paintErase == true {
-                transport.clearMelodyStep(c.step)
+        guard let c = cell(v.location, stepW: stepW, cols: cols, rowCount: rowCount) else { return }
+        switch brush {
+        case nil:
+            if transport.selectedMelody[c.step] == c.row {
+                brush = .undecided(row: c.row, step: c.step)   // on a note: stretch or erase?
             } else {
+                brush = .paint
                 transport.placeMelody(row: c.row, step: c.step)
             }
+        case .undecided(let row, let step):
+            if c.row == row && c.step > step {
+                brush = .stretch(row: row, step: step)
+                transport.setMelodyLength(step: step, len: c.step - step + 1)
+            } else if c.step != step || c.row != row {
+                brush = .erase
+                transport.clearMelodyStep(step)
+                transport.clearMelodyStep(c.step)
+            }
+        case .paint:
+            transport.placeMelody(row: c.row, step: c.step)
+        case .erase:
+            transport.clearMelodyStep(c.step)
+        case .stretch(_, let step):
+            transport.setMelodyLength(step: step, len: max(1, c.step - step + 1))
         }
     }
     private func onEnded(_ v: DragGesture.Value, stepW: CGFloat, cols: Int, rowCount: Int) {
-        defer { didDrag = false; paintErase = nil; transport.endStroke() }
+        defer { didDrag = false; brush = nil; transport.endStroke() }
         let dx = abs(v.translation.width), dy = abs(v.translation.height)
         guard !didDrag, dx + dy <= 12 else { return }   // only a true tap toggles
         if let c = cell(v.location, stepW: stepW, cols: cols, rowCount: rowCount) {
@@ -78,6 +98,7 @@ struct PianoRollView: View {
     private func draw(_ ctx: GraphicsContext, size: CGSize, stepW: CGFloat, cols: Int, rowCount: Int) {
         let ctxM = transport.context
         let melody = transport.selectedMelody
+        let lens = transport.selectedMelodyLens
         let others = transport.showShadow ? transport.otherMelodies : []
         for visRow in 0..<rowCount {
             let row = rowCount - 1 - visRow
@@ -102,7 +123,12 @@ struct PianoRollView: View {
                 let playh = step == playhead.currentStep
                     && (!transport.songPlaying || playhead.currentPattern == transport.editIndex)
                 if on {
-                    ctx.fill(path, with: .color(Theme.cyan.opacity(playh ? 1.0 : 0.85)))
+                    // Note bar spans its length in steps.
+                    let len = max(1, min(lens[step], cols - step))
+                    let bar = CGRect(x: x + 1, y: y + 1,
+                                     width: stepW * CGFloat(len) - 2, height: rowHeight - 2)
+                    ctx.fill(Path(roundedRect: bar, cornerRadius: 4),
+                             with: .color(Theme.cyan.opacity(playh ? 1.0 : 0.85)))
                 } else if ghost {
                     ctx.fill(path, with: .color(Theme.cyan.opacity(0.20)))
                 } else {

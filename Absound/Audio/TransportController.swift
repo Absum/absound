@@ -274,6 +274,26 @@ final class TransportController: ObservableObject {
     var selectedLayer: Layer? { selectedLayerId.flatMap { id in project.layers.first { $0.id == id } } }
     var selectedPatch: SynthPatch? { selectedLayer?.patch }
 
+    var selectedMelodyLens: [Int] {
+        guard let id = selectedLayerId else { return Array(repeating: 1, count: stepCount) }
+        return project.patterns[editIndex].melodyLen(id)
+    }
+
+    /// Stretch/shrink a note: gate holds `len` steps (1..steps remaining).
+    func setMelodyLength(step: Int, len: Int) {
+        guard let l = selectedLayer, l.kind == .synth,
+              (0..<stepCount).contains(step),
+              project.patterns[editIndex].melody(l.id)[step] != nil else { return }
+        beginStroke()
+        let clamped = min(max(len, 1), stepCount - step)
+        var lens = project.patterns[editIndex].melodyLen(l.id)
+        guard lens[step] != clamped else { return }
+        lens[step] = clamped
+        project.patterns[editIndex].melodyLens = project.patterns[editIndex].melodyLens ?? [:]
+        project.patterns[editIndex].melodyLens?[l.id] = lens
+        engine.setStepLen(track: l.engineId, pattern: editIndex, step: step, len: clamped)
+    }
+
     var selectedMelody: [Int?] {
         guard let id = selectedLayerId else { return Array(repeating: nil, count: stepCount) }
         return project.patterns[editIndex].melody(id)
@@ -469,6 +489,11 @@ final class TransportController: ObservableObject {
         guard lane[step] != row else { return }   // already there (paint dedupe)
         lane[step] = row
         project.patterns[editIndex].melodies[l.id] = lane
+        if var lens = project.patterns[editIndex].melodyLens?[l.id], lens[step] != 1 {
+            lens[step] = 1
+            project.patterns[editIndex].melodyLens?[l.id] = lens
+            engine.setStepLen(track: l.engineId, pattern: editIndex, step: step, len: 1)
+        }
         engine.setStep(track: l.engineId, pattern: editIndex, step: step,
                        note: context.midiNote(forRow: row), velocity: l.melodyVelocity)
     }
@@ -515,7 +540,18 @@ final class TransportController: ObservableObject {
             if l.kind == .drum {
                 writeDrumLane(l, sparkDrumLane(sound: DrumSound(rawValue: l.sound) ?? .perc, rnd: rnd))
             } else {
-                writeMelodyLane(l, sparkMelodicLane(category: l.patch?.category ?? .lead, rnd: rnd))
+                let cat = l.patch?.category ?? .lead
+                let lane = sparkMelodicLane(category: cat, rnd: rnd)
+                writeMelodyLane(l, lane)
+                // Sustain by category: pads breathe long, bass notes hold their beat.
+                let hold = cat == .pad ? 6 : (cat == .bass ? 2 : 1)
+                if hold > 1 {
+                    var lens = Array(repeating: 1, count: stepCount)
+                    for s in 0..<stepCount where lane[s] != nil { lens[s] = min(hold, stepCount - s) }
+                    project.patterns[editIndex].melodyLens = project.patterns[editIndex].melodyLens ?? [:]
+                    project.patterns[editIndex].melodyLens?[l.id] = lens
+                    for s in 0..<stepCount { engine.setStepLen(track: l.engineId, pattern: editIndex, step: s, len: lens[s]) }
+                }
             }
         }
     }
@@ -706,12 +742,14 @@ final class TransportController: ObservableObject {
                 }
             } else {
                 let lane = project.patterns[p].melody(l.id)
+                let lens = project.patterns[p].melodyLen(l.id)
                 for s in 0..<stepCount {
                     if let row = lane[s] {
                         engine.setStep(track: l.engineId, pattern: p, step: s, note: ctx.midiNote(forRow: row), velocity: l.melodyVelocity)
                     } else {
                         engine.setStep(track: l.engineId, pattern: p, step: s, note: 0, velocity: 0)
                     }
+                    engine.setStepLen(track: l.engineId, pattern: p, step: s, len: lens[s])
                 }
             }
         }
@@ -721,12 +759,14 @@ final class TransportController: ObservableObject {
         for p in project.patterns.indices {
             for l in melodicLayers {
                 let lane = project.patterns[p].melody(l.id)
+                let lens = project.patterns[p].melodyLen(l.id)
                 for s in 0..<stepCount {
                     if let row = lane[s] {
                         engine.setStep(track: l.engineId, pattern: p, step: s, note: ctx.midiNote(forRow: row), velocity: l.melodyVelocity)
                     } else {
                         engine.setStep(track: l.engineId, pattern: p, step: s, note: 0, velocity: 0)
                     }
+                    engine.setStepLen(track: l.engineId, pattern: p, step: s, len: lens[s])
                 }
             }
         }

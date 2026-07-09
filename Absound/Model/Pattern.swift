@@ -68,9 +68,11 @@ struct PatternData: Identifiable, Codable {
     var name: String
     var melodies: [UUID: [Int?]] = [:]   // synth layer id -> rows
     var drums: [UUID: [Bool]] = [:]      // drum layer id -> on/off
+    var melodyLens: [UUID: [Int]]? = nil // synth layer id -> per-step length in steps (nil/absent == all 1)
 
     func melody(_ layer: UUID) -> [Int?] { melodies[layer] ?? Array(repeating: nil, count: Project.stepCount) }
     func drumLane(_ layer: UUID) -> [Bool] { drums[layer] ?? Array(repeating: false, count: Project.stepCount) }
+    func melodyLen(_ layer: UUID) -> [Int] { melodyLens?[layer] ?? Array(repeating: 1, count: Project.stepCount) }
 }
 
 struct Project: Codable, Identifiable {

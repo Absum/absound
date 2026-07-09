@@ -178,6 +178,9 @@ final class AudioEngine {
     func setTrackSolo(_ engineId: Int, soloed: Bool) { ab_core_set_track_solo(core, Int32(engineId), soloed ? 1 : 0) }
     func clearTrack(_ engineId: Int, pattern: Int) { ab_core_clear_track(core, Int32(engineId), Int32(pattern)) }
 
+    func setStepLen(track: Int, pattern: Int, step: Int, len: Int) {
+        ab_core_set_step_len(core, Int32(track), Int32(pattern), Int32(step), Int32(len))
+    }
     func setStep(track: Int, pattern: Int, step: Int, note: Int, velocity: Int) {
         ab_core_set_step(core, Int32(track), Int32(pattern), Int32(step), Int32(note), Int32(velocity))
     }

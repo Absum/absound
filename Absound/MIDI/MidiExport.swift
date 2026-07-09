@@ -75,12 +75,15 @@ enum MidiExport {
                     }
                 } else {
                     let lane = pat.melody(layer.id)
+                    let lens = pat.melodyLen(layer.id)
                     for s in 0..<Project.stepCount {
                         guard let row = lane[s] else { continue }
                         let midi = UInt8(clamping: ctx.midiNote(forRow: row))
+                        // Sustained notes export their held length (minus a hair of release).
+                        let dur = lens[s] > 1 ? Float32(Double(lens[s]) * sixteenth) - 0.02 : noteDur
                         var msg = MIDINoteMessage(channel: channel, note: midi,
                                                   velocity: UInt8(layer.melodyVelocity),
-                                                  releaseVelocity: 0, duration: noteDur)
+                                                  releaseVelocity: 0, duration: dur)
                         MusicTrackNewMIDINoteEvent(tr, barStart + MusicTimeStamp(Double(s) * sixteenth), &msg)
                     }
                 }

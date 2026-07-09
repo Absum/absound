@@ -404,6 +404,37 @@ final class DSPCoreTests: XCTestCase {
         wait(for: [renderDone, mutateDone], timeout: 30)
     }
 
+    func testNoteLengthSustains() {
+        func tailRMS(len: Int32) -> Double {
+            let core = ab_core_create(sr)!; defer { ab_core_destroy(core) }
+            let t = addTrack(core, kind: AB_KIND_SYNTH, sound: AB_SYNTH_PLUCK)
+            var patch = ABPatch(); ab_patch_init(&patch)
+            patch.ampS = 0.9; patch.ampD = 0.05; patch.ampR = 0.03
+            ab_core_set_patch(core, Int32(t), &patch)
+            setStep(core, t, 0, 60, 120)
+            ab_core_set_step_len(core, Int32(t), 0, 0, len)
+            ab_core_set_tempo(core, 120)
+            // Warm up one block so the staged patch is applied before step 0 fires.
+            var w = [Float](repeating: 0, count: 256), w2 = w
+            ab_core_render(core, &w, &w2, 256)
+            ab_core_set_playing(core, 1)
+            // Skip the first half bar, measure the second (steps 8-15).
+            var l = [Float](repeating: 0, count: 4096), r = l
+            let halfBar = Int(sr) // 8 steps at 120bpm = 1s
+            var skipped = 0
+            while skipped < halfBar { ab_core_render(core, &l, &r, 4096); skipped += 4096 }
+            var sum = 0.0, n = 0
+            for _ in 0..<8 {
+                ab_core_render(core, &l, &r, 4096)
+                for x in l { sum += Double(x * x); n += 1 }
+            }
+            return (sum / Double(max(n, 1))).squareRoot()
+        }
+        let short = tailRMS(len: 1), held = tailRMS(len: 16)
+        XCTAssertGreaterThan(held, short * 2 + 0.0005,
+                             "a 16-step note must still sound in the second half bar (\(short) vs \(held))")
+    }
+
     func testGrooveAccentSoftensOffbeats() {
         func rms(accent: Float) -> Double {
             let core = ab_core_create(sr)!; defer { ab_core_destroy(core) }

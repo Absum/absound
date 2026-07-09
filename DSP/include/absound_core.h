@@ -187,6 +187,8 @@ float ab_core_master_level(ABAudioCore *core);
 
 /* Pattern editing. velocity 0 clears the step; 1..127 enables it. For drum tracks
  * midiNote is ignored. */
+/* Note length in steps (1..16, synth tracks): the gate holds len steps. */
+void ab_core_set_step_len(ABAudioCore *core, int track, int pattern, int step, int lenSteps);
 void ab_core_set_step(ABAudioCore *core, int track, int pattern, int step, int midiNote, int velocity);
 
 /* Live one-shot trigger (Highway/keyboard). */

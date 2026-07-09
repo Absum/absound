@@ -871,7 +871,7 @@ struct FXChainProc {
     }
 };
 
-struct StepData { int16_t note; float vel; };
+struct StepData { int16_t note; float vel; int16_t len = 1; };
 
 // ---- Built-in default patches (S1 bridge; Swift takes over in S2) -----------
 void defaultPatch(int preset, ABPatch &p) {
@@ -1074,7 +1074,7 @@ struct ABAudioCore {
     // worst mistrigger ONE step once, and both fields are clamped at the ABI.
     // Accepted by design — atomics per cell would cost more than the fault.
     void triggerStep(int step) {
-        int gate = static_cast<int>(samplesPerStep * 0.9);
+        const int baseGate = static_cast<int>(samplesPerStep * 0.9);
         // Accent: shape velocity by beat position (downbeat full, offbeats soft).
         const float acc = accentAmt.load(std::memory_order_relaxed);
         const float posF = (step % 4 == 0) ? 1.0f
@@ -1098,6 +1098,9 @@ struct ABAudioCore {
             if (sd.vel <= 0.0f) continue;
             float v = sd.vel * posF;
             if (t.kind == AB_KIND_SYNTH) {
+                // A length of n steps gates for n-0.1 steps (tiny release gap).
+                const int len = sd.len > 1 ? sd.len : 1;
+                const int gate = len > 1 ? static_cast<int>(samplesPerStep * (len - 0.1)) : baseGate;
                 t.alloc()->noteOn(t.cfg, sd.note, v, gate, t.lastNote);
                 t.lastNote = sd.note;
             } else {
@@ -1287,6 +1290,13 @@ void ab_core_set_track_solo(ABAudioCore *core, int track, int soloed) {
     bool newVal = soloed != 0;
     bool oldVal = core->tracks[track].soloed.exchange(newVal, std::memory_order_relaxed);
     if (newVal != oldVal) core->soloCount.fetch_add(newVal ? 1 : -1, std::memory_order_relaxed);
+}
+
+void ab_core_set_step_len(ABAudioCore *core, int track, int pattern, int step, int lenSteps) {
+    if (!core || track < 0 || track >= AB_MAX_TRACKS) return;
+    if (pattern < 0 || pattern >= AB_MAX_PATTERNS || step < 0 || step >= AB_NUM_STEPS) return;
+    if (lenSteps < 1) lenSteps = 1; else if (lenSteps > AB_NUM_STEPS) lenSteps = AB_NUM_STEPS;
+    core->tracks[track].steps[pattern][step].len = static_cast<int16_t>(lenSteps);
 }
 
 void ab_core_set_step(ABAudioCore *core, int track, int pattern, int step, int midiNote, int velocity) {
