@@ -55,3 +55,31 @@ final class ScaleTests: XCTestCase {
         XCTAssertEqual(ctx.noteName(forRow: 7), "C5")
     }
 }
+
+final class TheoryCoachTests: XCTestCase {
+    let ctx = MusicalContext(root: 0, scale: .naturalMinor, baseOctave: 3)
+
+    func testEmptyAndSingleNoteGiveNoReading() {
+        XCTAssertNil(TheoryCoach.read(melody: Array(repeating: nil, count: 16), context: ctx))
+        var one: [Int?] = Array(repeating: nil, count: 16); one[0] = 7
+        XCTAssertNil(TheoryCoach.read(melody: one, context: ctx))
+    }
+
+    func testAnchoredMelodyIsCalledAnchored() {
+        // Root/fifth on every strong beat (degrees 0 and 4 in natural minor).
+        var lane: [Int?] = Array(repeating: nil, count: 16)
+        lane[0] = 7; lane[4] = 11; lane[8] = 7; lane[12] = 11   // root, fifth (rows n=7: 7=root oct2, 11=deg4)
+        lane[2] = 8; lane[6] = 9
+        let r = TheoryCoach.read(melody: lane, context: ctx)
+        XCTAssertNotNil(r)
+        XCTAssertTrue(r!.headline.contains("anchored"), "got: \(r!.headline)")
+    }
+
+    func testStepwiseRisingLineIsDescribed() {
+        var lane: [Int?] = Array(repeating: nil, count: 16)
+        for s in 0..<8 { lane[s * 2] = s }   // 0,1,2,...,7 — pure rising steps
+        let r = TheoryCoach.read(melody: lane, context: ctx)!
+        XCTAssertTrue(r.headline.contains("rising"), "got: \(r.headline)")
+        XCTAssertFalse(r.lesson.isEmpty)
+    }
+}

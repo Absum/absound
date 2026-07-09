@@ -63,6 +63,7 @@ targets:
       - path: DSP
       # Pure-logic sources under test (no app host).
       - path: Absound/Theory/Scale.swift
+      - path: Absound/Theory/TheoryCoach.swift
       - path: Absound/Model/SynthPatch.swift
       - path: Absound/Model/FXModel.swift
       - path: Absound/Model/Pattern.swift

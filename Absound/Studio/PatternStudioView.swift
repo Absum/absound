@@ -17,6 +17,7 @@ struct PatternStudioView: View {
     @State private var midiExport: MidiExportItem?
     @State private var confirmClear = false
     @State private var confirmSpark = false
+    @State private var showLesson = false
     @State private var confirmRemoveLayer: UUID?
     @EnvironmentObject var toast: ToastCenter
     @Environment(\.verticalSizeClass) private var vSize
@@ -95,10 +96,33 @@ struct PatternStudioView: View {
                        editSound: { transport.select($0); showSoundLab = true },
                        changeSound: { transport.select($0); showBrowser = true })
             contextualControls
+            coachLine
             editorArea.frame(maxHeight: .infinity)
             transportBar
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 10)
+    }
+
+    private var currentReading: TheoryReading? {
+        guard melodicSelected, melodyMode == .roll else { return nil }
+        return TheoryCoach.read(melody: transport.selectedMelody, context: transport.context)
+    }
+
+    @ViewBuilder private var coachLine: some View {
+        if let reading = currentReading {
+            Button { showLesson = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "graduationcap.fill").font(.system(size: 9))
+                    Text(reading.headline).font(Theme.light(11)).lineLimit(1)
+                    Image(systemName: "chevron.right").font(.system(size: 7))
+                }
+                .foregroundStyle(Theme.teal.opacity(0.85))
+                .padding(.vertical, 3).padding(.horizontal, 10)
+                .background(Capsule().fill(Theme.teal.opacity(0.08)))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .sheet(isPresented: $showLesson) { LessonSheet(transport: transport) }
+        }
     }
 
     private func sparkTapped() {
@@ -443,3 +467,41 @@ private struct SettingsSheet: View {
 }
 
 #Preview { PatternStudioView(transport: TransportController()) }
+
+
+/// The tap-to-learn sheet: names what the melody is doing and why it works.
+private struct LessonSheet: View {
+    @ObservedObject var transport: TransportController
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let reading = TheoryCoach.read(melody: transport.selectedMelody, context: transport.context)
+        NavigationStack {
+            ZStack {
+                Theme.bgGradient.ignoresSafeArea()
+                VStack(alignment: .leading, spacing: 16) {
+                    Label(transport.context.displayName, systemImage: "key")
+                        .font(Theme.title(16)).foregroundStyle(Theme.teal)
+                    if let r = reading {
+                        Text(r.headline.prefix(1).uppercased() + r.headline.dropFirst())
+                            .font(Theme.display(20)).foregroundStyle(Theme.frost)
+                        Text(r.lesson)
+                            .font(Theme.body(15)).foregroundStyle(Theme.frost.opacity(0.85))
+                            .lineSpacing(4)
+                    }
+                    Text(TheoryCoach.scaleFlavor(transport.context.scale))
+                        .font(Theme.light(13)).foregroundStyle(Theme.frost.opacity(0.55))
+                        .lineSpacing(3)
+                        .padding(.top, 4)
+                    Spacer()
+                }
+                .padding(20)
+            }
+            .navigationTitle("Why this works")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium])
+        .preferredColorScheme(.dark)
+    }
+}
