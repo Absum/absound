@@ -289,23 +289,79 @@ struct PatternStudioView: View {
 
     // MARK: - Landscape (wide editor)
 
+    /// Landscape: full parity with portrait — a compact control rail on the left
+    /// (transport, spark, mode, layer + pattern management, groove/key, undo)
+    /// with the editor getting all remaining width.
     private var landscapeBody: some View {
         HStack(spacing: 10) {
-            VStack(spacing: 10) {
-                playButton(size: 52)
-                if melodicSelected {
-                    Picker("", selection: $melodyMode) {
-                        ForEach(MelodyMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.segmented)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 10) {
+                    HStack(spacing: 8) {
+                        playButton(size: 46)
+                        Button { sparkTapped() } label: {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.bgTop)
+                                .frame(width: 38, height: 38)
+                                .background(Circle().fill(LinearGradient(colors: [Theme.cyan, Theme.teal],
+                                                                         startPoint: .topLeading, endPoint: .bottomTrailing)))
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        tempoButton("minus", -1)
+                        Text("\(Int(transport.tempo))").font(Theme.title(16)).foregroundStyle(Theme.frost).monospacedDigit()
+                        tempoButton("plus", 1)
+                    }
+                    if melodicSelected {
+                        Picker("", selection: $melodyMode) {
+                            ForEach(MelodyMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }.pickerStyle(.segmented)
+                        if transport.isRecording {
+                            Label("REC", systemImage: "record.circle").font(Theme.light(10)).foregroundStyle(.red)
+                        }
+                    }
+                    PatternChips(transport: transport)
+                    Menu {
+                        ForEach(transport.melodicLayers) { l in Button(l.displayName) { transport.select(l.id) } }
+                        Button("Drums") { transport.selectDrums() }
+                        Divider()
+                        Button { showBrowser = true } label: { Label("Add layer / sound", systemImage: "plus") }
+                    } label: { pill(transport.selectedLayer?.displayName ?? "Drums", icon: "rectangle.stack") }
+                    if melodicSelected, let layer = transport.selectedLayer {
+                        HStack(spacing: 6) {
+                            Button { showBrowser = true } label: { pill("Sound", icon: "waveform") }
+                            layerMenu(layer)
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Button { transport.undo() } label: {
+                            Image(systemName: "arrow.uturn.backward").font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(transport.canUndo ? Theme.frost : Theme.frost.opacity(0.25))
+                                .frame(width: 30, height: 30)
+                        }.disabled(!transport.canUndo)
+                        Button { transport.redo() } label: {
+                            Image(systemName: "arrow.uturn.forward").font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(transport.canRedo ? Theme.frost : Theme.frost.opacity(0.25))
+                                .frame(width: 30, height: 30)
+                        }.disabled(!transport.canRedo)
+                        Menu {
+                            Button { transport.addPattern() } label: { Label("Add pattern", systemImage: "plus") }
+                            Button { transport.duplicatePattern() } label: { Label("Duplicate pattern", systemImage: "doc.on.doc") }
+                            Divider()
+                            Button {
+                                if let url = MidiExport.export(transport.project) { midiExport = MidiExportItem(url: url) }
+                            } label: { Label("Export MIDI", systemImage: "square.and.arrow.up") }
+                            Divider()
+                            Button(role: .destructive) { confirmClear = true } label: { Label(clearLabel, systemImage: "trash") }
+                        } label: {
+                            Image(systemName: "ellipsis").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.frost)
+                                .frame(width: 30, height: 30).background(Circle().fill(Color.white.opacity(0.07)))
+                        }
+                    }
+                    Button { showSettings = true } label: { pill(transport.context.rootName, icon: "key") }
+                    Spacer(minLength: 0)
                 }
-                Menu {
-                    ForEach(transport.melodicLayers) { l in Button(l.displayName) { transport.select(l.id) } }
-                    Button("Drums") { transport.selectDrums() }
-                } label: { pill(transport.selectedLayer?.displayName ?? "Drums", icon: "rectangle.stack") }
-                Button { showSettings = true } label: { pill("\(transport.context.rootName) · \(Int(transport.tempo))", icon: "key") }
-                Spacer()
             }
-            .frame(width: 132)
+            .frame(width: 150)
             editorArea
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
