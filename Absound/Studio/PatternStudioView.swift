@@ -215,17 +215,18 @@ struct PatternStudioView: View {
     }
 
     private var transportBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 8) {
             playButton(size: 56)
             VStack(alignment: .leading, spacing: 1) {
                 Text(transport.songPlaying ? "SONG" : "PATTERN")
-                    .font(Theme.light(10)).foregroundStyle(Theme.frost.opacity(0.45)).tracking(2)
+                    .font(Theme.light(9)).foregroundStyle(Theme.frost.opacity(0.45)).tracking(1.5)
                 Text(transport.songPlaying ? transport.project.name
                      : (transport.patternNames.indices.contains(transport.editIndex)
                         ? transport.patternNames[transport.editIndex] : ""))
                     .font(Theme.title(15)).foregroundStyle(Theme.frost.opacity(0.85)).lineLimit(1)
             }
-            Spacer()
+            .fixedSize()                      // never compress into a letter column
+            Spacer(minLength: 4)
             Button { sparkTapped() } label: {
                 Image(systemName: "sparkles")
                     .font(.system(size: 18, weight: .semibold))
@@ -236,14 +237,14 @@ struct PatternStudioView: View {
                                        startPoint: .topLeading, endPoint: .bottomTrailing)))
                     .shadow(color: Theme.cyan.opacity(0.5), radius: 6)
             }
-            Spacer()
-            HStack(spacing: 12) {
+            Spacer(minLength: 4)
+            HStack(spacing: 8) {
                 tempoButton("minus", -1)
-                Text("\(Int(transport.tempo))").font(Theme.display(26)).foregroundStyle(Theme.frost).monospacedDigit().frame(width: 54)
+                Text("\(Int(transport.tempo))").font(Theme.display(24)).foregroundStyle(Theme.frost).monospacedDigit().frame(width: 48)
                 tempoButton("plus", 1)
             }
         }
-        .padding(.vertical, 11).padding(.horizontal, 18)
+        .padding(.vertical, 11).padding(.horizontal, 14)
         .background(RoundedRectangle(cornerRadius: 20).fill(Color.white.opacity(0.06))
             .overlay(RoundedRectangle(cornerRadius: 20).stroke(Theme.frost.opacity(0.12), lineWidth: 1)))
     }
