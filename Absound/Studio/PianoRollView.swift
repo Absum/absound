@@ -21,6 +21,7 @@ struct PianoRollView: View {
     var rowHeight: CGFloat = 30
     private let gutter: CGFloat = 42
     @State private var didDrag = false
+    @State private var paintErase: Bool? = nil   // first cell decides the brush
 
     var body: some View {
         GeometryReader { geo in
@@ -57,11 +58,16 @@ struct PianoRollView: View {
         didDrag = true                         // any real movement is not a tap
         if dy > dx { return }                  // vertical drag -> let the ScrollView scroll, paint nothing
         if let c = cell(v.location, stepW: stepW, cols: cols, rowCount: rowCount) {
-            transport.placeMelody(row: c.row, step: c.step)
+            if paintErase == nil { paintErase = transport.selectedMelody[c.step] == c.row }
+            if paintErase == true {
+                transport.clearMelodyStep(c.step)
+            } else {
+                transport.placeMelody(row: c.row, step: c.step)
+            }
         }
     }
     private func onEnded(_ v: DragGesture.Value, stepW: CGFloat, cols: Int, rowCount: Int) {
-        defer { didDrag = false; transport.endStroke() }
+        defer { didDrag = false; paintErase = nil; transport.endStroke() }
         let dx = abs(v.translation.width), dy = abs(v.translation.height)
         guard !didDrag, dx + dy <= 12 else { return }   // only a true tap toggles
         if let c = cell(v.location, stepW: stepW, cols: cols, rowCount: rowCount) {

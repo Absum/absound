@@ -289,7 +289,8 @@ final class TransportController: ObservableObject {
 
     // MARK: - Transport
 
-    func togglePlay() { isPlaying ? stop() : playPattern() }
+    /// Stop only if we're the playing mode; switch from song → pattern directly.
+    func togglePlay() { (isPlaying && !songPlaying) ? stop() : playPattern() }
 
     func playPattern() {
         engine.start(); engine.setSongMode(false); engine.setPattern(editIndex)
@@ -300,7 +301,9 @@ final class TransportController: ObservableObject {
         engine.start(); engine.setSong(project.song); engine.setSongMode(true)
         engine.setPlaying(true); isPlaying = true; songPlaying = true; startPolling()
     }
-    func toggleSong() { isPlaying ? stop() : playSong() }
+    /// One tap always does the right thing: stop if the song is playing,
+    /// otherwise start the song — even if a pattern loop is running (mode switch).
+    func toggleSong() { songPlaying ? stop() : playSong() }
 
     func stop() {
         engine.setPlaying(false); isPlaying = false; songPlaying = false
@@ -471,6 +474,7 @@ final class TransportController: ObservableObject {
 
     func clearMelodyStep(_ step: Int) {
         guard let l = selectedLayer, l.kind == .synth else { return }
+        beginStroke()
         var lane = project.patterns[editIndex].melody(l.id)
         guard lane[step] != nil else { return }
         lane[step] = nil
