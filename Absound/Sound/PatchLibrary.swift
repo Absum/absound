@@ -38,12 +38,14 @@ final class PatchLibrary: ObservableObject {
     }
 
     /// Copy a (factory or user) patch into My Sounds under a unique name and new id.
+    /// Pass `named` to choose the name ("Save as…"); it is still uniqued.
     @discardableResult
-    func saveAsCopy(of patch: SynthPatch) -> SynthPatch {
+    func saveAsCopy(of patch: SynthPatch, named: String? = nil) -> SynthPatch {
         var p = patch
         p.id = UUID()
         p.isFactory = false
-        p.name = uniqueName(p.name)
+        let base = named?.trimmingCharacters(in: .whitespacesAndNewlines)
+        p.name = uniqueName((base?.isEmpty == false ? base! : p.name))
         userPatches.append(p)
         persist()
         return p

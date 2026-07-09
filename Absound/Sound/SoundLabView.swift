@@ -23,8 +23,10 @@ struct SoundLabView: View {
     @State private var mode: Mode = .simple
     @State private var original: SynthPatch?
     @State private var showRename = false
+    @State private var showSaveAs = false
     @State private var confirmRevert = false
     @State private var newName = ""
+    @State private var saveAsName = ""
 
     enum Mode: String, CaseIterable { case simple = "Simple", advanced = "Advanced" }
 
@@ -94,6 +96,9 @@ struct SoundLabView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
+                        Button { saveAsName = "\(current.name) 2"; showSaveAs = true } label: {
+                            Label("Save as…", systemImage: "square.and.arrow.down.on.square")
+                        }
                         Button { newName = current.name; showRename = true } label: {
                             Label("Rename", systemImage: "pencil")
                         }
@@ -117,6 +122,13 @@ struct SoundLabView: View {
                 TextField("Name", text: $newName)
                 Button("Rename") { rename() }
                 Button("Cancel", role: .cancel) {}
+            }
+            .alert("Save as new sound", isPresented: $showSaveAs) {
+                TextField("Name", text: $saveAsName)
+                Button("Save") { saveAs() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The current sound keeps its saved state; your edits become a new sound in My Sounds.")
             }
         }
         .preferredColorScheme(.dark)
@@ -158,6 +170,21 @@ struct SoundLabView: View {
             }
             original = transport.selectedPatch
         }
+    }
+
+    /// Branch the current edits into a NEW My Sound under a chosen name; the
+    /// lab (and layer, in layer mode) switches to the new copy, leaving the
+    /// original sound's saved state untouched.
+    private func saveAs() {
+        let copy = library.saveAsCopy(of: current, named: saveAsName)
+        if standalone {
+            draft = copy
+            transport.applyPreviewPatch(copy)
+        } else if let layerId = transport.selectedLayerId {
+            transport.applyPatch(layerId, patch: copy)
+        }
+        original = copy
+        toast.show("Saved as \"\(copy.name)\"")
     }
 
     private func revert() {
