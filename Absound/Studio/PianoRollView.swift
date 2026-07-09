@@ -61,7 +61,7 @@ struct PianoRollView: View {
         }
     }
     private func onEnded(_ v: DragGesture.Value, stepW: CGFloat, cols: Int, rowCount: Int) {
-        defer { didDrag = false }
+        defer { didDrag = false; transport.endStroke() }
         let dx = abs(v.translation.width), dy = abs(v.translation.height)
         guard !didDrag, dx + dy <= 12 else { return }   // only a true tap toggles
         if let c = cell(v.location, stepW: stepW, cols: cols, rowCount: rowCount) {
@@ -164,7 +164,7 @@ struct DrumLanesView: View {
         transport.setDrum(c.lane.id, step: c.step, on: paintOn ?? true)
     }
     private func onEnded(_ v: DragGesture.Value, stepW: CGFloat, cols: Int, lanes: [Layer]) {
-        defer { didDrag = false; paintOn = nil }
+        defer { didDrag = false; paintOn = nil; transport.endStroke() }
         let dx = abs(v.translation.width), dy = abs(v.translation.height)
         guard !didDrag, dx + dy <= 12 else { return }   // only a true tap toggles
         if let c = cell(v.location, stepW: stepW, cols: cols, lanes: lanes) {

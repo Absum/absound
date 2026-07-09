@@ -100,6 +100,97 @@ final class TransportController: ObservableObject {
     /// Immediate save (called when the app backgrounds).
     func saveNow() { store.save(project) }
 
+    // MARK: - Undo / redo (snapshot stack over the whole Project value)
+
+    private var undoStack: [Project] = []
+    private var redoStack: [Project] = []
+    private var strokeActive = false
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    /// Capture the current state before a user-level mutation. Cheap: Project
+    /// is a value type. Any new edit invalidates the redo branch.
+    func checkpoint() {
+        undoStack.append(project)
+        if undoStack.count > 50 { undoStack.removeFirst() }
+        redoStack.removeAll()
+    }
+
+    /// Paint strokes and REC sessions checkpoint once per gesture, not per cell.
+    func beginStroke() {
+        guard !strokeActive else { return }
+        checkpoint()
+        strokeActive = true
+    }
+    func endStroke() { strokeActive = false }
+
+    func undo() {
+        guard let prev = undoStack.popLast() else { return }
+        redoStack.append(project)
+        restore(prev)
+    }
+    func redo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(project)
+        restore(next)
+    }
+
+    /// Bring the app and engine to a snapshot. Same layer set → light push;
+    /// layer add/remove → full re-registration via loadProject's path.
+    private func restore(_ p: Project) {
+        endStroke()
+        if p.layers.map(\.id) == project.layers.map(\.id) {
+            project = p
+            for l in p.layers {
+                if let patch = l.patch {
+                    engine.setPatch(l.engineId, patch.toAB())
+                    engine.setFX(l.engineId, patch.fxChain.toABChain())
+                }
+                engine.setTrackMute(l.engineId, muted: l.muted)
+                if l.kind == .drum, let s = l.drumStrip {
+                    engine.setStrip(l.engineId, gain: s.gain, pan: s.pan, delaySend: s.delaySend, reverbSend: s.reverbSend)
+                }
+            }
+            engine.setMasterFX((p.masterFX ?? []).toABChain())
+            engine.setTempo(p.tempo); tempo = p.tempo
+            engine.setSong(p.song)
+            engine.setPattern(p.currentPatternIndex)
+            pushEverything()
+        } else {
+            restoreStructural(p)
+        }
+    }
+
+    /// Full teardown + re-register (borrowed from loadProject, without touching
+    /// the song library or forcing a save-now).
+    private func restoreStructural(_ p: Project) {
+        stop()
+        for l in project.layers { engine.removeTrack(l.engineId) }
+        var newP = p
+        for i in newP.layers.indices {
+            let l = newP.layers[i]
+            newP.layers[i].engineId = engine.addTrack(kind: l.kind.rawValue, sound: l.sound)
+            if let patch = l.patch {
+                engine.setPatch(newP.layers[i].engineId, patch.toAB())
+                engine.setFX(newP.layers[i].engineId, patch.fxChain.toABChain())
+            }
+            if l.muted { engine.setTrackMute(newP.layers[i].engineId, muted: true) }
+            if l.kind == .drum, let s = l.drumStrip {
+                engine.setStrip(newP.layers[i].engineId, gain: s.gain, pan: s.pan,
+                                delaySend: s.delaySend, reverbSend: s.reverbSend)
+            }
+        }
+        engine.setMasterFX((newP.masterFX ?? []).toABChain())
+        project = newP
+        if selectedLayerId == nil || !newP.layers.contains(where: { $0.id == selectedLayerId }) {
+            selection = newP.layers.last(where: { $0.kind == .synth }).map { .track($0.id) } ?? .drums
+        }
+        tempo = newP.tempo
+        engine.setPattern(newP.currentPatternIndex)
+        engine.setSong(newP.song)
+        pushEverything()
+    }
+
     /// Swap the whole working project (Songs library load / New Song). Tears down
     /// the current engine tracks and registers the new project's layers.
     func loadProject(_ p: Project) {
@@ -202,6 +293,7 @@ final class TransportController: ObservableObject {
     // MARK: - Layer management
 
     func addSynthLayer(_ patch: SynthPatch) {
+        checkpoint()
         var l = Layer.synth(patch)
         l.engineId = engine.addTrack(kind: TrackKind.synth.rawValue, sound: 0)
         guard l.engineId >= 0 else { return }
@@ -219,12 +311,14 @@ final class TransportController: ObservableObject {
         engine.setFX(project.layers[i].engineId, patch.fxChain.toABChain())
     }
     func addDrumLayer(_ sound: DrumSound) {
+        checkpoint()
         var l = Layer.drum(sound)
         l.engineId = engine.addTrack(kind: TrackKind.drum.rawValue, sound: sound.rawValue)
         guard l.engineId >= 0 else { return }
         project.layers.append(l)
     }
     func removeTrack(_ id: UUID) {
+        checkpoint()
         guard let i = layerIndex(id) else { return }
         engine.removeTrack(project.layers[i].engineId)
         let wasSel = selectedLayerId == id
@@ -285,12 +379,14 @@ final class TransportController: ObservableObject {
         objectWillChange.send()
     }
     func addPattern() {
+        checkpoint()
         guard project.patterns.count < Project.maxPatterns else { return }
         let name = Project.patternNames[project.patterns.count]
         project.patterns.append(PatternData(name: name))
         selectPattern(project.patterns.count - 1)   // empty pattern already clear in engine
     }
     func duplicatePattern() {
+        checkpoint()
         guard project.patterns.count < Project.maxPatterns else { return }
         var copy = project.patterns[editIndex]
         copy.id = UUID()
@@ -305,12 +401,14 @@ final class TransportController: ObservableObject {
     // MARK: - Song management
 
     func appendSection(_ patternIndex: Int) {
+        checkpoint()
         guard project.song.count < Int(AB_MAX_SONG_LEN) else { return }
         project.song.append(patternIndex)
         engine.setSong(project.song)
     }
     func removeSection(at i: Int) {
         guard i >= 0, i < project.song.count else { return }
+        checkpoint()
         project.song.remove(at: i)
         engine.setSong(project.song)
         if project.song.isEmpty && songPlaying { stop() }
@@ -318,15 +416,17 @@ final class TransportController: ObservableObject {
 
     /// Replace the whole arrangement order (drag-to-reorder commit).
     func setSongOrder(_ order: [Int]) {
+        checkpoint()
         let valid = order.filter { project.patterns.indices.contains($0) }
         project.song = valid
         engine.setSong(valid)
     }
-    func clearSong() { project.song.removeAll(); engine.setSong(project.song); if songPlaying { stop() } }
+    func clearSong() { checkpoint(); project.song.removeAll(); engine.setSong(project.song); if songPlaying { stop() } }
 
     // MARK: - Editing: melody (selected synth layer, current pattern)
 
     func toggleMelody(row: Int, step: Int) {
+        if !strokeActive { checkpoint() }
         guard let l = selectedLayer, l.kind == .synth else { return }
         var lane = project.patterns[editIndex].melody(l.id)
         if lane[step] == row {
@@ -341,6 +441,7 @@ final class TransportController: ObservableObject {
         project.patterns[editIndex].melodies[l.id] = lane
     }
     func placeMelody(row: Int, step: Int) {
+        beginStroke()
         guard let l = selectedLayer, l.kind == .synth else { return }
         var lane = project.patterns[editIndex].melody(l.id)
         guard lane[step] != row else { return }   // already there (paint dedupe)
@@ -361,6 +462,7 @@ final class TransportController: ObservableObject {
 
     /// Drag-paint a drum cell to an explicit on/off state (no toggle).
     func setDrum(_ id: UUID, step: Int, on: Bool) {
+        beginStroke()
         guard let l = layer(id) else { return }
         var lane = project.patterns[editIndex].drumLane(id)
         guard lane[step] != on else { return }
@@ -382,6 +484,7 @@ final class TransportController: ObservableObject {
     /// current key — a drum groove, a bassline anchored on the root, and
     /// melodies — across every layer. Freshly seeded per call: reroll forever.
     func sparkIdea() {
+        checkpoint()
         var seed = UInt64.random(in: UInt64.min...UInt64.max) | 1
         func rnd(_ n: Int) -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int((seed >> 33) % UInt64(max(n, 1))) }
 
@@ -477,6 +580,7 @@ final class TransportController: ObservableObject {
     /// A gentle random walk over scale degrees with rests, anchored to chord tones
     /// on strong beats. Freshly seeded per call, so every tap rerolls a new idea.
     func generateMelody() {
+        checkpoint()
         guard let l = selectedLayer, l.kind == .synth else { return }
         let maxRow = melodyRowCount - 1
         var seed = UInt64.random(in: UInt64.min...UInt64.max) | 1
@@ -512,7 +616,7 @@ final class TransportController: ObservableObject {
         guard let l = selectedLayer else { return }
         engine.start(); engine.noteOn(track: l.engineId, note: context.midiNote(forRow: row), velocity: 0.9)
     }
-    func toggleRecord() { isRecording.toggle() }
+    func toggleRecord() { isRecording.toggle(); if !isRecording { endStroke() } }
     func highwayTap(row: Int) {
         audition(row: row)
         guard isRecording, isPlaying, playhead.playPosition >= 0 else { return }
@@ -522,6 +626,7 @@ final class TransportController: ObservableObject {
     // MARK: - Editing: drums
 
     func toggleDrum(_ id: UUID, step: Int) {
+        if !strokeActive { checkpoint() }
         guard let l = layer(id) else { return }
         var lane = project.patterns[editIndex].drumLane(id)
         let on = !lane[step]
@@ -535,6 +640,7 @@ final class TransportController: ObservableObject {
 
     func setRoot(_ root: Int) { project.contextRoot = ((root % 12) + 12) % 12; repushAllMelodies() }
     func setScale(_ scale: Scale) {
+        checkpoint()
         project.scaleRaw = scale.rawValue
         let maxRow = scale.degreeCount * 2
         for p in project.patterns.indices {
@@ -548,6 +654,7 @@ final class TransportController: ObservableObject {
         repushAllMelodies()
     }
     func clearCurrent() {
+        checkpoint()
         switch selection {
         case .drums:
             for l in drumLayers {

@@ -158,6 +158,20 @@ struct PatternStudioView: View {
             .fixedSize()
             Spacer(minLength: 6)
             PatternChips(transport: transport)
+            Button { transport.undo() } label: {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(transport.canUndo ? Theme.frost : Theme.frost.opacity(0.25))
+                    .frame(width: 30, height: 34)
+            }
+            .disabled(!transport.canUndo)
+            Button { transport.redo() } label: {
+                Image(systemName: "arrow.uturn.forward")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(transport.canRedo ? Theme.frost : Theme.frost.opacity(0.25))
+                    .frame(width: 30, height: 34)
+            }
+            .disabled(!transport.canRedo)
             Menu {
                 Button { transport.addPattern() } label: { Label("Add pattern", systemImage: "plus") }
                 Button { transport.duplicatePattern() } label: { Label("Duplicate pattern", systemImage: "doc.on.doc") }
